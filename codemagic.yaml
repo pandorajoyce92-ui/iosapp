@@ -1,6 +1,6 @@
 ﻿workflows:
-  ios-debug:
-    name: iOS Debug Build
+  ios-release:
+    name: iOS Release Build
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
@@ -15,22 +15,19 @@
       - name: Get Flutter packages
         script: |
           flutter pub get
-      - name: Flutter doctor
-        script: |
-          flutter doctor -v
       - name: Install CocoaPods dependencies
         script: |
           find . -name "Podfile" -execdir pod install \;
-      - name: Build iOS debug (no codesign)
+      - name: Build iOS release (no codesign)
         script: |
-          flutter build ios --debug --no-codesign
+          flutter build ios --release --no-codesign
       - name: Package into IPA
         script: |
           mkdir -p build/ios/ipa
           cd build/ios/iphoneos
           mkdir Payload
           mv Runner.app Payload/
-          zip -r ../ipa/app-debug.ipa Payload
+          zip -r ../ipa/app-release.ipa Payload
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
