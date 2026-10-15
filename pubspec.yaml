@@ -1,0 +1,46 @@
+name: jianxin_app
+description: A new Flutter project.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.13.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  webview_flutter: ^4.10.0
+  dio: ^5.7.0
+  cookie_jar: ^4.0.8
+  dio_cookie_manager: ^3.1.0
+  flutter_secure_storage: ^9.2.2
+  path_provider: ^2.1.4
+  socket_io_client: 1.0.2
+  image_picker: ^1.1.2
+  gal: ^2.3.0
+  qr_flutter: ^4.1.0
+  shared_preferences: ^2.3.2
+  audioplayers: ^6.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_localizations: # ★ 新增
+    sdk: flutter
+  cached_network_image: ^3.4.1
+  cupertino_icons: ^1.0.8
+  flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.4 # 建议使用最新版本
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/music/
+    - assets/images/
+    - assets/icon/
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icon/app_icon.png"
