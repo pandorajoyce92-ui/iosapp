@@ -1,4 +1,4 @@
-workflows:
+﻿workflows:
   ios-debug:
     name: iOS Debug Build
     instance_type: mac_mini_m2
@@ -12,9 +12,6 @@ workflows:
         - $HOME/.pub-cache
         - $FLUTTER_ROOT/.pub-cache
     scripts:
-      - name: Set up local properties
-        script: |
-          echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties" || true
       - name: Get Flutter packages
         script: |
           flutter pub get
