@@ -1,0 +1,39 @@
+workflows:
+  ios-debug:
+    name: iOS Debug Build
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    cache:
+      cache_paths:
+        - $HOME/.pub-cache
+        - $FLUTTER_ROOT/.pub-cache
+    scripts:
+      - name: Set up local properties
+        script: |
+          echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties" || true
+      - name: Get Flutter packages
+        script: |
+          flutter pub get
+      - name: Flutter doctor
+        script: |
+          flutter doctor -v
+      - name: Install CocoaPods dependencies
+        script: |
+          find . -name "Podfile" -execdir pod install \;
+      - name: Build iOS debug (no codesign)
+        script: |
+          flutter build ios --debug --no-codesign
+      - name: Package into IPA
+        script: |
+          mkdir -p build/ios/ipa
+          cd build/ios/iphoneos
+          mkdir Payload
+          mv Runner.app Payload/
+          zip -r ../ipa/app-debug.ipa Payload
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
