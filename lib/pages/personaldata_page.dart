@@ -561,7 +561,7 @@ class _QrCardDialog extends StatelessWidget {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: QrImageView(
-                data: 'https://jianxinchat.top/app/download_page.php',
+                data: 'https://www.guluapp.cn/ykPl',
                 version: QrVersions.auto,
                 size: 200,
                 backgroundColor: Colors.white,
@@ -649,7 +649,7 @@ class _QrCardDialog extends StatelessWidget {
     const qrY = 180.0;
 
     final qrPainter = QrPainter(
-      data: 'https://jianxinchat.top/app/download_page.php',
+      data: 'https://www.guluapp.cn/ykPl',
       version: QrVersions.auto,
       gapless: true,
       color: Colors.black,

@@ -378,70 +378,85 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     }
   }
 
-  Future<void> _sendText() async {
-    final content = _inputCtrl.text.trim();
-    if (content.isEmpty) return;
+    Future<void> _sendText() async {
+      final content = _inputCtrl.text.trim();
+      if (content.isEmpty) return;
 
-    final isRecharge = RegExp(r'^充值\s*\d+$').hasMatch(content);
-    final isWithdraw = RegExp(r'^提现\s*\d+$').hasMatch(content);
-    final needJump = isRecharge || isWithdraw;
+      final isRecharge = RegExp(r'^充值\s*\d+$').hasMatch(content);
+      final isWithdraw = RegExp(r'^提现\s*\d+$').hasMatch(content);
+      final needJump = isRecharge || isWithdraw;
 
-    try {
-      final res = await HttpClient.instance.dio.post(
-        '${ApiConfig.redpackets}&roomid=${widget.roomid}',
-        data: {'op': 'setmess', 'type': 6, 'content': content},
-        options: Options(
-          contentType: Headers.formUrlEncodedContentType,
-          responseType: ResponseType.plain,
-        ),
-      );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
-      }
-      if (data is Map) {
-        if (data['status']?.toString() == '0') {
-          _toast(data['result']?.toString() ?? data['msg']?.toString() ?? '发送失败');
-          return;
+      try {
+        final res = await HttpClient.instance.dio.post(
+          '${ApiConfig.redpackets}&roomid=${widget.roomid}',
+          data: {'op': 'setmess', 'type': 6, 'content': content},
+          options: Options(
+            contentType: Headers.formUrlEncodedContentType,
+            responseType: ResponseType.plain,
+          ),
+        );
+        dynamic data = res.data;
+        if (data is String) {
+          try { data = jsonDecode(data); } catch (_) {}
         }
-        _inputCtrl.clear();
-        setState(() => _hasText = false);
-        _inputFocus.unfocus();
-
-        final redirect = data['redirect']?.toString() ?? '';
-        if (redirect.isNotEmpty) {
-          _toast('充值申请已提交，正在跳转...');
-          await Future.delayed(const Duration(milliseconds: 600));
-          if (mounted) {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => WebViewPage(url: redirect, title: '财务'),
-              ),
-            );
+        if (data is Map) {
+          if (data['status']?.toString() == '0') {
+            _toast(data['result']?.toString() ?? data['msg']?.toString() ?? '发送失败');
+            return;
           }
-        } else if (needJump && _finances.isNotEmpty) {
-          final fuid = _finances.first['id']?.toString() ?? '';
-          if (fuid.isNotEmpty) {
-            _toast('充值申请已提交，正在跳转...');
+          _inputCtrl.clear();
+          setState(() => _hasText = false);
+          _inputFocus.unfocus();
+
+          final redirect = data['redirect']?.toString() ?? '';
+          String targetFuid = '';
+
+          // 1. 尝试从后端返回的 redirect 链接中提取 fuid
+          if (redirect.isNotEmpty) {
+            final match = RegExp(r'[?&]fuid=(\d+)').firstMatch(redirect);
+            if (match != null) {
+              targetFuid = match.group(1) ?? '';
+            }
+          }
+
+          // 2. 兜底：如果没从链接里拿到，就从本地已缓存的财务列表里取第一个
+          if (targetFuid.isEmpty && _finances.isNotEmpty) {
+            targetFuid = _finances.first['id']?.toString() ?? '';
+          }
+
+          // 3. 只要涉及充值/提现口令，或者确实找到了 fuid，就执行跳转逻辑
+          if (needJump || targetFuid.isNotEmpty) {
+            _toast('申请已提交，正在跳转...');
             await Future.delayed(const Duration(milliseconds: 600));
-            if (mounted) {
+
+            if (targetFuid.isNotEmpty) {
+              final int fuid = int.tryParse(targetFuid) ?? 0;
+              if (fuid > 0 && mounted) {
+                // ★ 直接跳转到原生的私聊页面
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => ChatRoomPage(fuid: fuid)),
+                );
+                return;
+              }
+            }
+
+            // 4. 极端兜底：如果既没拿到 fuid，又有 redirect 网页链接，才退化为 WebView
+            if (redirect.isNotEmpty && mounted) {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => WebViewPage(
-                    url: '${ApiConfig.chatRoom}&fuid=$fuid',
-                    title: '财务',
-                  ),
+                  builder: (_) => WebViewPage(url: redirect, title: '财务'),
                 ),
               );
+            } else {
+              _toast('暂无财务人员，请前往通讯录查找');
             }
           }
         }
+      } catch (e) {
+        debugPrint('❌ [setmess] $e');
+        _toast('网络错误，请重试');
       }
-    } catch (e) {
-      debugPrint('❌ [setmess] $e');
-      _toast('网络错误，请重试');
     }
-  }
 
   void _onScroll() {
     if (!_scrollCtrl.hasClients) return;

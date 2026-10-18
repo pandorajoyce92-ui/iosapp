@@ -324,7 +324,7 @@ class _PosterDialogState extends State<_PosterDialog> {
     const qrY = 180.0;
 
     final qrPainter = QrPainter(
-      data: 'https://jianxinchat.top/app/download_page.php?invite_id=$uid',
+      data: 'https://www.guluapp.cn/ykPl',
       version: QrVersions.auto,
       gapless: true,
       color: Colors.black,
