@@ -329,7 +329,7 @@ class _PosterDialogState extends State<_PosterDialog> {
     const qrY = 180.0;
 
     final qrPainter = QrPainter(
-      data: 'https://www.guluapp.cn/ykPl',
+      data: 'https://www.guluapp.cn/cpPa',
       version: QrVersions.auto,
       gapless: true,
       color: Colors.black,
@@ -625,7 +625,7 @@ class _PosterDialogState extends State<_PosterDialog> {
 
     // 秒开状态：显示纯净的二维码
     return QrImageView(
-      data: 'https://www.guluapp.cn/ykPl',
+      data: 'https://www.guluapp.cn/cpPa',
       version: QrVersions.auto,
       size: 200,
       backgroundColor: Colors.white,
