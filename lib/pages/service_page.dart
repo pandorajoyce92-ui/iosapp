@@ -3,11 +3,12 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:dio/dio.dart';
-import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:flutter/cupertino.dart' show CupertinoIcons, CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 import '../core/config.dart';
 import '../core/theme.dart';
@@ -95,21 +96,20 @@ class _ServicePageState extends State<ServicePage> {
 
   void _goUnder() {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const UnderPage()),
+      CupertinoPageRoute(builder: (_) => const UnderPage()),
     );
   }
 
-    // ★ 跳转平台客服私聊（带自动问候）
-    void _goPlatformService() {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => const ChatRoomPage(
-            fuid: _platformServiceUid,
-            autoGreeting: true,   // ★ 告诉聊天页：进入后触发客服问候
-          ),
+  void _goPlatformService() {
+    Navigator.of(context).push(
+      CupertinoPageRoute(
+        builder: (_) => const ChatRoomPage(
+          fuid: _platformServiceUid,
+          autoGreeting: true,
         ),
-      );
-    }
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -239,7 +239,7 @@ class _ServicePageState extends State<ServicePage> {
 }
 
 // ====================================================================
-//                            海报弹窗（不变）
+//                            海报弹窗
 // ====================================================================
 class _PosterDialog extends StatefulWidget {
   final UserInfo user;
@@ -251,16 +251,21 @@ class _PosterDialog extends StatefulWidget {
 
 class _PosterDialogState extends State<_PosterDialog> {
   Uint8List? _posterBytes;
-  bool _generating = true;
+  bool _generating = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _generate();
+    // 确认这里已经删除了 _generate();
   }
 
   Future<void> _generate() async {
+    setState(() {
+      _generating = true;
+      _error = null;
+    });
+
     try {
       final bytes = await _buildPoster(
         uid: widget.user.id,
@@ -302,11 +307,11 @@ class _PosterDialogState extends State<_PosterDialog> {
 
     const bannerHeight = 140.0;
     final bannerRect = const Rect.fromLTWH(0, 0, width, bannerHeight);
-        final gradient = const LinearGradient(
-          colors: [Color(0xFF007AFF), Color(0xFF07C160)],  // ★ 蓝 → 绿
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-        );
+    final gradient = const LinearGradient(
+      colors: [Color(0xFF007AFF), Color(0xFF07C160)],
+      begin: Alignment.centerLeft,
+      end: Alignment.centerRight,
+    );
     canvas.drawRect(bannerRect, Paint()..shader = gradient.createShader(bannerRect));
 
     _paintText(
@@ -396,15 +401,15 @@ class _PosterDialogState extends State<_PosterDialog> {
       ),
     );
     final inviteCodeY = nicknameY + 55;
-        _paintText(
-          canvas,
-          '邀请码：$uid',
-          Offset(width / 2, inviteCodeY),
-          const TextStyle(
-            fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF007AFF),  // ★ 紫色改蓝
-            fontFamily: 'PingFang SC',
-          ),
-        );
+    _paintText(
+      canvas,
+      '邀请码：$uid',
+      Offset(width / 2, inviteCodeY),
+      const TextStyle(
+        fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFF007AFF),
+        fontFamily: 'PingFang SC',
+      ),
+    );
 
     final picture = recorder.endRecording();
     final img = await picture.toImage(width.toInt(), height.toInt());
@@ -424,7 +429,11 @@ class _PosterDialogState extends State<_PosterDialog> {
   Future<ui.Image> _loadNetworkImage(String url) async {
     final res = await HttpClient.instance.dio.get<List<int>>(
       url,
-      options: Options(responseType: ResponseType.bytes),
+      options: Options(
+        responseType: ResponseType.bytes,
+        sendTimeout: const Duration(seconds: 3),
+        receiveTimeout: const Duration(seconds: 3),
+      ),
     );
     final bytes = Uint8List.fromList(res.data ?? []);
     final codec = await ui.instantiateImageCodec(bytes);
@@ -432,38 +441,40 @@ class _PosterDialogState extends State<_PosterDialog> {
     return frame.image;
   }
 
-    Future<void> _save() async {
-      final bytes = _posterBytes;
-      if (bytes == null) return;
-
-      // ★ 提前抓 messenger 和 navigator，因为 pop 后 context 会失效
-      final messenger = ScaffoldMessenger.of(context);
-      final navigator = Navigator.of(context);
-
-      try {
-        final has = await Gal.hasAccess();
-        if (!has) await Gal.requestAccess();
-        await Gal.putImageBytes(
-          bytes,
-          name: 'jianxin_poster_${DateTime.now().millisecondsSinceEpoch}',
-        );
-
-        // ★ 保存成功后：先关弹窗，再弹提示
-        navigator.pop();
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('已保存到相册'),
-            duration: Duration(milliseconds: 1800),
-          ),
-        );
-      } catch (e) {
-        debugPrint('❌ 保存失败: $e');
-        // ★ 保存失败：不关弹窗
-        messenger.showSnackBar(
-          SnackBar(content: Text('保存失败：$e')),
-        );
-      }
+  Future<void> _save() async {
+    if (_posterBytes == null) {
+      _toast('正在生成海报，请稍候...');
+      await _generate();
     }
+
+    final bytes = _posterBytes;
+    if (bytes == null) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+
+    try {
+      final has = await Gal.hasAccess();
+      if (!has) await Gal.requestAccess();
+      await Gal.putImageBytes(
+        bytes,
+        name: 'jianxin_poster_${DateTime.now().millisecondsSinceEpoch}',
+      );
+
+      navigator.pop();
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('已保存到相册'),
+          duration: Duration(milliseconds: 1800),
+        ),
+      );
+    } catch (e) {
+      debugPrint('❌ 保存失败: $e');
+      messenger.showSnackBar(
+        SnackBar(content: Text('保存失败：$e')),
+      );
+    }
+  }
 
   void _toast(String msg) {
     if (!mounted) return;
@@ -477,96 +488,148 @@ class _PosterDialogState extends State<_PosterDialog> {
     return Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-        const Text(
-          '点击保存到相册',
-          style: TextStyle(color: Colors.white, fontSize: 16),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 320),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
         ),
-          const SizedBox(height: 14),
-          Flexible(
-            child: GestureDetector(
-              onLongPress: _save,
-              child: Container(
-                constraints: const BoxConstraints(maxHeight: 520),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.5),
-                      blurRadius: 32, offset: const Offset(0, 8),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 1. 顶部关闭按钮
+            SizedBox(
+              height: 48,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 16),
+                    child: GestureDetector(
+                      onTap: () => Navigator.of(context).pop(),
+                      child: const Text('×',
+                          style: TextStyle(fontSize: 26, color: Color(0xFFAAAAAA), height: 1)),
                     ),
-                  ],
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: _buildContent(),
+                  ),
+                ],
               ),
             ),
-          ),
-          const SizedBox(height: 18),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _dialogBtn('保存到相册', _save, primary: true),
-              const SizedBox(width: 10),
-              _dialogBtn('关闭', () => Navigator.of(context).pop()),
-            ],
-          ),
-        ],
+
+            // 2. 用户信息卡片区
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      width: 56, height: 56,
+                      color: const Color(0xFFF0ECFF),
+                                            child: widget.user.avatarUrl.isEmpty
+                                                ? const Icon(Icons.person, color: Colors.deepPurple, size: 28)
+                                                : CachedNetworkImage(
+                                                    imageUrl: widget.user.avatarUrl,
+                                                    width: 56, height: 56, fit: BoxFit.cover,
+                                                    placeholder: (context, url) =>
+                                                        const Icon(Icons.person, color: Colors.deepPurple, size: 28),
+                                                    errorWidget: (context, url, error) =>
+                                                        const Icon(Icons.person, color: Colors.deepPurple, size: 28),
+                                                  ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.user.nickname.isEmpty ? '简信用户' : widget.user.nickname,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111111)),
+                        ),
+                        const SizedBox(height: 4),
+                        Text('邀请码: ${widget.user.id}',
+                            style: const TextStyle(fontSize: 13, color: Color(0xFF666666))),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // 3. 中间二维码内容区
+            Container(
+              width: 200, height: 200,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: _buildContent(),
+            ),
+            const SizedBox(height: 20),
+
+            // 4. 底部保存按钮
+            GestureDetector(
+              onTap: _save,
+              child: Container(
+                height: 54,
+                decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: Color(0xFFF0F0F4))),
+                  color: Color(0xFFFAFAFC),
+                ),
+                alignment: Alignment.center,
+                child: const Text('保存二维码到手机',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF007AFF))),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildContent() {
     if (_generating) {
-      return const SizedBox(
-        width: 200, height: 260,
-        child: Center(child: CircularProgressIndicator()),
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 12),
+            Text('正在生成海报...', style: TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+        ),
       );
     }
+
     if (_error != null) {
-      return SizedBox(
-        width: 260, height: 200,
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Text(
-              '生成失败\n$_error',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Color(0xFFE94848), fontSize: 13),
-            ),
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Text(
+            '生成失败\n$_error',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Color(0xFFE94848), fontSize: 13),
           ),
         ),
       );
     }
-    return Image.memory(_posterBytes!, fit: BoxFit.contain);
-  }
 
-  Widget _dialogBtn(String label, VoidCallback onTap, {bool primary = false}) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 44,
-        padding: const EdgeInsets.symmetric(horizontal: 28),
-        decoration: BoxDecoration(
-          color: primary ? null : Colors.transparent,
-          gradient: primary
-              ? const LinearGradient(
-                  colors: [Color(0xFF007AFF), Color(0xFF0060DF)],
-                  begin: Alignment.topLeft, end: Alignment.bottomRight,
-                )
-              : null,
-          border: primary ? null : Border.all(color: Colors.white54),
-          borderRadius: BorderRadius.circular(24),
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          label,
-          style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
-        ),
-      ),
+    if (_posterBytes != null) {
+      return Image.memory(_posterBytes!, fit: BoxFit.contain);
+    }
+
+    // 秒开状态：显示纯净的二维码
+    return QrImageView(
+      data: 'https://www.guluapp.cn/ykPl',
+      version: QrVersions.auto,
+      size: 200,
+      backgroundColor: Colors.white,
+      errorCorrectionLevel: QrErrorCorrectLevel.H,
     );
   }
 }

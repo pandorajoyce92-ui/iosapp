@@ -3,6 +3,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/cupertino.dart';
+import '../core/data_cache.dart';
 
 import '../core/config.dart';
 import '../core/http_client.dart';
@@ -57,7 +59,7 @@ class RedlogPage extends StatefulWidget {
 }
 
 class _RedlogPageState extends State<RedlogPage> {
-  bool _loading = true;
+  bool _loading = false; // ★ 初始不显示全屏 loading
 
   String _asset = '0.00';
   String _todayWin = '0.00';
@@ -109,15 +111,59 @@ class _RedlogPageState extends State<RedlogPage> {
     super.dispose();
   }
 
-  Future<void> _init() async {
-    await _loadRoles();
-    await Future.wait([
-      _loadAsset(),
-      _loadTodayWin(),
-      _loadCards(), // 默认加载卡片
-    ]);
-    if (mounted) setState(() => _loading = false);
-  }
+    Future<void> _init() async {
+      // ★★★ 1. 优先读取本地缓存，瞬间渲染卡片和资产 ★★★
+      _loadCacheFirst();
+
+      // ★★★ 2. 并发拉取最新数据（不再等待 _loadRoles 完成） ★★★
+      await Future.wait([
+        _loadRoles(),
+        _loadAsset(),
+        _loadTodayWin(),
+        _loadCards(),
+      ]);
+
+      if (mounted) setState(() => _loading = false);
+    }
+
+    // ★ 新增：同步读缓存的方法
+    void _loadCacheFirst() {
+      // 1. 恢复资产/今日输赢
+      final cachedAsset = DataCache.get('redlog_asset_${widget.roomid}');
+      if (cachedAsset != null && mounted) {
+        setState(() => _asset = cachedAsset.toString());
+      }
+      final cachedWin = DataCache.get('redlog_todaywin_${widget.roomid}');
+      if (cachedWin != null && mounted) {
+        setState(() => _todayWin = cachedWin.toString());
+      }
+
+      // 2. 恢复汇总卡片
+      final cachedCards = DataCache.get('redlog_cards_${widget.roomid}');
+      if (cachedCards is Map) {
+        try {
+          final result = Map<String, dynamic>.from(cachedCards);
+          final myCardJson = result['my_card'];
+          final childCardsJson = result['child_cards'] as List? ?? [];
+
+          final myCard = myCardJson != null
+              ? SummaryCardData.fromJson(Map<String, dynamic>.from(myCardJson))
+              : null;
+          final cards = childCardsJson
+              .map((e) => SummaryCardData.fromJson(Map<String, dynamic>.from(e)))
+              .toList();
+
+          if (mounted) {
+            setState(() {
+              _myCard = myCard;
+              _cards = cards;
+            });
+          }
+        } catch (e) {
+          debugPrint('❌ [redlog] 读取卡片缓存失败: $e');
+        }
+      }
+    }
 
   Future<void> _loadRoles() async {
     try {
@@ -190,73 +236,81 @@ class _RedlogPageState extends State<RedlogPage> {
     return list;
   }
 
-  Future<void> _loadAsset() async {
-    try {
-      final res = await HttpClient.instance.dio.get(
-        '${ApiConfig.redlog}&op=get_asset&roomid=${widget.roomid}',
-        options: Options(responseType: ResponseType.plain),
-      );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
+    Future<void> _loadAsset() async {
+      try {
+        final res = await HttpClient.instance.dio.get(
+          '${ApiConfig.redlog}&op=get_asset&roomid=${widget.roomid}',
+          options: Options(responseType: ResponseType.plain),
+        );
+        dynamic data = res.data;
+        if (data is String) {
+          try { data = jsonDecode(data); } catch (_) {}
+        }
+        if (data is Map && data['status'] == 1) {
+          final val = data['result']?.toString() ?? '0.00';
+          if (mounted) setState(() => _asset = val);
+          await DataCache.set('redlog_asset_${widget.roomid}', val); // ★ 新增
+        }
+      } catch (e) {
+        debugPrint('❌ [redlog get_asset] $e');
       }
-      if (data is Map && data['status'] == 1) {
-        if (mounted) setState(() => _asset = data['result']?.toString() ?? '0.00');
-      }
-    } catch (e) {
-      debugPrint('❌ [redlog get_asset] $e');
     }
-  }
 
-  Future<void> _loadTodayWin() async {
-    try {
-      final res = await HttpClient.instance.dio.get(
-        '${ApiConfig.redlog}&op=today_win&date=${_fmtDate(_startDate)}&roomid=${widget.roomid}',
-        options: Options(responseType: ResponseType.plain),
-      );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
+    Future<void> _loadTodayWin() async {
+      try {
+        final res = await HttpClient.instance.dio.get(
+          '${ApiConfig.redlog}&op=today_win&date=${_fmtDate(_startDate)}&roomid=${widget.roomid}',
+          options: Options(responseType: ResponseType.plain),
+        );
+        dynamic data = res.data;
+        if (data is String) {
+          try { data = jsonDecode(data); } catch (_) {}
+        }
+        if (data is Map && data['status'] == 1) {
+          final val = data['result']?.toString() ?? '0.00';
+          if (mounted) setState(() => _todayWin = val);
+          await DataCache.set('redlog_todaywin_${widget.roomid}', val); // ★ 新增
+        }
+      } catch (e) {
+        debugPrint('❌ [redlog today_win] $e');
       }
-      if (data is Map && data['status'] == 1) {
-        if (mounted) setState(() => _todayWin = data['result']?.toString() ?? '0.00');
-      }
-    } catch (e) {
-      debugPrint('❌ [redlog today_win] $e');
     }
-  }
 
   // ★★★ 新增：加载卡片数据 ★★★
-  Future<void> _loadCards() async {
-    try {
-      final res = await HttpClient.instance.dio.get(
-        '${ApiConfig.redlog}&op=get_card_summary&roomid=${widget.roomid}',
-        options: Options(responseType: ResponseType.plain),
-      );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
-      }
-      if (data is Map && data['status'] == 1 && data['result'] is Map) {
-        final result = Map<String, dynamic>.from(data['result']);
-        final myCard = result['my_card'] != null
-            ? SummaryCardData.fromJson(Map<String, dynamic>.from(result['my_card']))
-            : null;
-        final List rawList = result['child_cards'] ?? [];
-        final cards = rawList
-            .map((e) => SummaryCardData.fromJson(Map<String, dynamic>.from(e)))
-            .toList();
-        if (mounted) {
-          setState(() {
-            _myCard = myCard;
-            _cards = cards;
-          });
+    Future<void> _loadCards() async {
+      try {
+        final res = await HttpClient.instance.dio.get(
+          '${ApiConfig.redlog}&op=get_card_summary&roomid=${widget.roomid}',
+          options: Options(responseType: ResponseType.plain),
+        );
+        dynamic data = res.data;
+        if (data is String) {
+          try { data = jsonDecode(data); } catch (_) {}
         }
+        if (data is Map && data['status'] == 1 && data['result'] is Map) {
+          final result = Map<String, dynamic>.from(data['result']);
+          final myCard = result['my_card'] != null
+              ? SummaryCardData.fromJson(Map<String, dynamic>.from(result['my_card']))
+              : null;
+          final List rawList = result['child_cards'] ?? [];
+          final cards = rawList
+              .map((e) => SummaryCardData.fromJson(Map<String, dynamic>.from(e)))
+              .toList();
+
+          if (mounted) {
+            setState(() {
+              _myCard = myCard;
+              _cards = cards;
+            });
+          }
+
+          // ★★★ 新增：请求成功，写入缓存 ★★★
+          await DataCache.set('redlog_cards_${widget.roomid}', result);
+        }
+      } catch (e) {
+        debugPrint('❌ [redlog get_card_summary] $e');
       }
-    } catch (e) {
-      debugPrint('❌ [redlog get_card_summary] $e');
     }
-  }
 
   // ★★★ 保留原有：加载明细列表 ★★★
   Future<void> _loadRecords({bool reset = false}) async {
@@ -418,12 +472,11 @@ class _RedlogPageState extends State<RedlogPage> {
               SizedBox(height: MediaQuery.of(context).padding.top),
               _buildTopBar(),
               Expanded(
-                child: _loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : ListView(
-                        controller: _scrollCtrl,
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 32),
-                        children: [
+                // ★ 直接渲染列表，不再全屏转圈
+                child: ListView(
+                  controller: _scrollCtrl,
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 32),
+                  children: [
                           _buildAssetPanel(),
                           const SizedBox(height: 12),
                           _buildFilterCard(),
@@ -468,16 +521,18 @@ class _RedlogPageState extends State<RedlogPage> {
       color: Colors.transparent,
       child: Stack(
         children: [
-          Positioned(
-            left: 8, top: 0, bottom: 0,
-            child: GestureDetector(
-              onTap: () => Navigator.of(context).maybePop(),
-              child: const SizedBox(
-                width: 40, height: 44,
-                child: Icon(CupertinoIcons.back, color: Colors.black, size: 22),
-              ),
-            ),
-          ),
+                    Positioned(
+                      left: 0, top: 0, bottom: 0,
+                      child: GestureDetector(
+                        onTap: () => Navigator.of(context).maybePop(),
+                        behavior: HitTestBehavior.opaque, // ★ 强制拦截，杜绝点击不灵敏
+                        child: Container(
+                          width: 50, height: 44,
+                          alignment: Alignment.center,
+                          child: const Icon(CupertinoIcons.back, color: Colors.black, size: 24),
+                        ),
+                      ),
+                    ),
           const Center(
             child: Text(
               '账单详情',
@@ -621,16 +676,16 @@ class _RedlogPageState extends State<RedlogPage> {
         data: card,
         isCurrentUser: false,
         onViewSubordinate: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => MemberSummaryPage(
-                roomid: widget.roomid,
-                targetUid: card.uid,
-                targetNickname: card.nickname,
-              ),
-            ),
-          );
+                    Navigator.push(
+                      context,
+                      CupertinoPageRoute(
+                        builder: (_) => MemberSummaryPage(
+                          roomid: widget.roomid,
+                          targetUid: card.uid,
+                          targetNickname: card.nickname,
+                        ),
+                      ),
+                    );
         },
       ));
     }

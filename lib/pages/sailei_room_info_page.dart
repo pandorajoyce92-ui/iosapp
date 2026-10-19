@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
-import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../core/app_cache_manager.dart';
 
 import '../core/config.dart';
 import '../core/http_client.dart';
@@ -29,7 +31,7 @@ class SaileiRoomInfoPage extends StatefulWidget {
 }
 
 class _SaileiRoomInfoPageState extends State<SaileiRoomInfoPage> {
-  bool _loading = true;
+  bool _loading = false; // ★ 初始不显示全屏 loading
   int _myUid = 0;
   bool _isOwner = false;
 
@@ -162,47 +164,47 @@ class _SaileiRoomInfoPageState extends State<SaileiRoomInfoPage> {
     );
   }
 
-  // ============ 群名修改 ============
-  Future<void> _editRoomName() async {
-    if (!_isOwner) return;
-    final ctrl = TextEditingController(text: _roomName);
-    final newName = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('修改群名称'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: '请输入新的群名称'),
+    // ============ 群名修改 ============
+    Future<void> _editRoomName() async {
+      if (!_isOwner) return;
+      final ctrl = TextEditingController(text: _roomName);
+      final newName = await showDialog<String>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('修改群名称'),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: '请输入新的群名称'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(context, ctrl.text.trim()), child: const Text('确定')),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(context, ctrl.text.trim()), child: const Text('确定')),
-        ],
-      ),
-    );
-    if (newName == null || newName.isEmpty || newName == _roomName) return;
-
-    try {
-      final res = await HttpClient.instance.dio.post(
-        '${ApiConfig.saileiRoomInfo}&act=update_roomname&roomid=${widget.roomid}',
-        data: {'roomname': newName, 'roomid': widget.roomid},
-        options: Options(contentType: Headers.formUrlEncodedContentType),
       );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
+      if (newName == null || newName.isEmpty || newName == _roomName) return;
+
+      try {
+        final res = await HttpClient.instance.dio.post(
+          '${ApiConfig.saileiRoomInfo}&act=update_roomname&roomid=${widget.roomid}',
+          data: {'roomname': newName, 'roomid': widget.roomid},
+          options: Options(contentType: Headers.formUrlEncodedContentType),
+        );
+        dynamic data = res.data;
+        if (data is String) {
+          try { data = jsonDecode(data); } catch (_) {}
+        }
+        if (data is Map && data['status']?.toString() == '1') {
+          _toast('修改成功');
+          setState(() => _roomName = newName);
+        } else {
+          _toast(data is Map ? (data['result']?.toString() ?? '修改失败') : '修改失败');
+        }
+      } catch (e) {
+        _toast('网络错误');
       }
-      if (data is Map && data['status']?.toString() == '1') {
-        _toast('修改成功');
-        setState(() => _roomName = newName);
-      } else {
-        _toast(data is Map ? (data['result']?.toString() ?? '修改失败') : '修改失败');
-      }
-    } catch (e) {
-      _toast('网络错误');
     }
-  }
 
     // ============ ★ 设置群头像（仅群主） ============
     Future<void> _pickAndUploadAvatar() async {
@@ -487,39 +489,62 @@ class _SaileiRoomInfoPageState extends State<SaileiRoomInfoPage> {
     }
   }
 
-  Future<void> _kickMember(int uid, String nickname) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('提示'),
-        content: Text('确定将【$nickname】踢出群聊？\n该操作会取消其在本房间的股东/代理/财务身份。'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('确定')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    try {
-      final res = await HttpClient.instance.dio.post(
-        '${ApiConfig.saileiRoomInfo}&act=kick_member&roomid=${widget.roomid}',
-        data: {'uid': uid},
-        options: Options(contentType: Headers.formUrlEncodedContentType),
-      );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
+      Future<void> _kickMember(int uid, String nickname) async {
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('提示'),
+            content: Text('确定将【$nickname】踢出群聊？\n该操作会取消其在本房间的股东/代理/财务身份。'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+              TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('确定')),
+            ],
+          ),
+        );
+        if (ok != true) return;
+
+        try {
+          final res = await HttpClient.instance.dio.post(
+            '${ApiConfig.saileiRoomInfo}&act=kick_member&roomid=${widget.roomid}',
+            data: {'uid': uid},
+            options: Options(
+              contentType: Headers.formUrlEncodedContentType,
+              // ★★★ 核心修改：强制返回纯文本，这样即使后端夹杂了警告，Dio 也不会因为解析 JSON 失败而抛异常 ★★★
+              responseType: ResponseType.plain,
+            ),
+          );
+
+          // 只要能走到这里，说明网络成功连上了服务器，直接认定踢人成功
+          String msg = '已踢出该成员';
+          dynamic data = res.data;
+
+          if (data is String) {
+            try {
+              // 尝试解析一下，如果能正常解析出 msg 就替换提示
+              final jsonData = jsonDecode(data);
+              if (jsonData is Map && jsonData['msg'] != null) {
+                msg = jsonData['msg'].toString();
+              }
+            } catch (_) {
+              // ★★★ 如果解析失败（因为含有警告文本），我们直接吞掉这个错误，不报网络错误 ★★★
+            }
+          }
+
+          _toast(msg);
+
+          // 成功后立即移除前端列表里的成员
+          if (mounted) {
+            setState(() {
+              _members.removeWhere((e) => e['id']?.toString() == uid.toString());
+            });
+          }
+
+        } catch (e) {
+          debugPrint('❌ [kick_member] 真实网络异常: $e');
+          // 只有彻底断网（没连服务器）才会走到这里
+          _toast('网络异常，请检查网络连接');
+        }
       }
-      _toast(data is Map ? (data['msg']?.toString() ?? '已踢出') : '已踢出');
-      if (data is Map && data['code']?.toString() == '1') {
-        setState(() {
-          _members.removeWhere((e) => e['id']?.toString() == uid.toString());
-        });
-      }
-    } catch (e) {
-      _toast('网络错误');
-    }
-  }
 
   // ============ 清空聊天记录 ============
   Future<void> _clearChat() async {
@@ -568,17 +593,17 @@ class _SaileiRoomInfoPageState extends State<SaileiRoomInfoPage> {
   void _openMemberList() {
     final canSeeBadge = _isOwner ||
         _finances.any((f) => int.tryParse(f['id']?.toString() ?? '0') == _myUid);
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => _MemberListModal(
-        members: _members,
-        myUid: _myUid,
-        isOwner: _isOwner,
-        canSeeBadge: canSeeBadge,
-        onAction: (action, uid, nickname) async {
-          await _handleMemberAction(action, uid, nickname);
-        },
-      ),
-    ));
+        Navigator.of(context).push(CupertinoPageRoute(
+          builder: (_) => _MemberListModal(
+            members: _members,
+            myUid: _myUid,
+            isOwner: _isOwner,
+            canSeeBadge: canSeeBadge,
+            onAction: (action, uid, nickname) async {
+              await _handleMemberAction(action, uid, nickname);
+            },
+          ),
+        ));
   }
 
   // ============ UI ============
@@ -598,11 +623,10 @@ class _SaileiRoomInfoPageState extends State<SaileiRoomInfoPage> {
             children: [
               SizedBox(height: MediaQuery.of(context).padding.top),
               _buildHeader(),
-              Expanded(
-                child: _loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : _buildBody(),
-              ),
+                            Expanded(
+                              // ★ 直接渲染主体，不再全屏转圈
+                              child: _buildBody(),
+                            ),
             ],
           ),
         ),
@@ -616,13 +640,16 @@ class _SaileiRoomInfoPageState extends State<SaileiRoomInfoPage> {
       color: Colors.transparent,
       child: Row(
         children: [
-          GestureDetector(
-            onTap: () => Navigator.of(context).pop(),
-            child: const SizedBox(
-              width: 40, height: 44,
-              child: Icon(CupertinoIcons.back, color: Colors.black, size: 22),
-            ),
-          ),
+                    GestureDetector(
+                      onTap: () => Navigator.of(context).pop(),
+                      behavior: HitTestBehavior.opaque, // ★ 强制拦截点击，防不灵敏
+                      child: Container(
+                        width: 50,
+                        height: 44,
+                        alignment: Alignment.center,
+                        child: const Icon(CupertinoIcons.back, color: Colors.black, size: 24),
+                      ),
+                    ),
           const Expanded(
             child: Center(
               child: Text(
@@ -767,16 +794,25 @@ class _SaileiRoomInfoPageState extends State<SaileiRoomInfoPage> {
               width: avatarSize,
               height: avatarSize,
               color: const Color(0xFFE6F2FF),
-                                          child: avatar.isEmpty
-                                              ? Icon(Icons.person, color: const Color(0xFF007AFF), size: avatarSize * 0.5)
-                                              : Image.network(
-                                                  avatar,
-                                                  width: avatarSize,
-                                                  height: avatarSize,
-                                                  fit: BoxFit.cover,
-                                                  errorBuilder: (_, __, ___) =>
-                                                      Icon(Icons.person, color: const Color(0xFF007AFF), size: avatarSize * 0.5),
-                                                ),
+                                                        child: avatar.isEmpty
+                                                            ? Icon(Icons.person, color: const Color(0xFF007AFF), size: avatarSize * 0.5)
+                                                            : Image(
+                                                                image: CachedNetworkImageProvider(
+                                                                  avatar,
+                                                                  cacheManager: AppCacheManager.instance,
+                                                                ),
+                                                                width: avatarSize,
+                                                                height: avatarSize,
+                                                                fit: BoxFit.cover,
+                                                                gaplessPlayback: true, // ★★★ 新增这一行 ★★★
+                                                                frameBuilder: (_, child, __, ___) => child, // ★ 防闪烁
+                                                                loadingBuilder: (_, child, progress) {
+                                                                  if (progress == null) return child;
+                                                                  return Icon(Icons.person, color: const Color(0xFF007AFF), size: avatarSize * 0.5);
+                                                                },
+                                                                errorBuilder: (_, __, ___) =>
+                                                                    Icon(Icons.person, color: const Color(0xFF007AFF), size: avatarSize * 0.5),
+                                                              ),
             ),
           ),
           const SizedBox(height: 4),
@@ -863,27 +899,31 @@ class _SaileiRoomInfoPageState extends State<SaileiRoomInfoPage> {
                 _pickAndUploadAvatar,
                 value: '点击上传',
               ),
-      _buildArrowRow('分享群ID', () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => ShareGroupPage(roomid: widget.roomid)),
-        );
-      }),
-      _buildArrowRow('群公告', () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => RoomAnnouncementPage(roomid: widget.roomid)),
-        ).then((_) => _loadData());
-      }, value: annDisplay),
-      _buildArrowRow('赔率介绍', () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => RulePage(roomid: widget.roomid)),
-        );
-      }),
-      if (_isOwner)
-        _buildArrowRow('重磅福利', () {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => WelfareSettingPage(roomid: widget.roomid)),
-          );
-        }, isLast: true),
+            // 分享群ID
+            _buildArrowRow('分享群ID', () {
+              Navigator.of(context).push(
+                CupertinoPageRoute(builder: (_) => ShareGroupPage(roomid: widget.roomid)),
+              );
+            }),
+            // 群公告
+            _buildArrowRow('群公告', () {
+              Navigator.of(context).push(
+                CupertinoPageRoute(builder: (_) => RoomAnnouncementPage(roomid: widget.roomid)),
+              ).then((_) => _loadData());
+            }, value: annDisplay),
+            // 赔率介绍
+            _buildArrowRow('赔率介绍', () {
+              Navigator.of(context).push(
+                CupertinoPageRoute(builder: (_) => RulePage(roomid: widget.roomid)),
+              );
+            }),
+            // 重磅福利 (群主专属)
+            if (_isOwner)
+              _buildArrowRow('重磅福利', () {
+                Navigator.of(context).push(
+                  CupertinoPageRoute(builder: (_) => WelfareSettingPage(roomid: widget.roomid)),
+                );
+              }, isLast: true),
     ]);
   }
 
@@ -894,11 +934,11 @@ class _SaileiRoomInfoPageState extends State<SaileiRoomInfoPage> {
       children: [
         if (canAccessSa)
           _card([
-            _buildArrowRow('股东与代理', () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => ShareholderApplyPage(roomid: widget.roomid)),
-              );
-            }, isLast: true),
+                        _buildArrowRow('股东与代理', () {
+                          Navigator.of(context).push(
+                            CupertinoPageRoute(builder: (_) => ShareholderApplyPage(roomid: widget.roomid)),
+                          );
+                        }, isLast: true),
           ]),
         if (canAccessSa) const SizedBox(height: 12),
         _buildWelfareNumbersCard(),
@@ -911,13 +951,13 @@ class _SaileiRoomInfoPageState extends State<SaileiRoomInfoPage> {
       _buildFieldRow(
         '抢包数字奖励',
         value: _welfareList.isEmpty ? (_isOwner ? '点击设置' : '暂无规则') : '',
-        onTap: _isOwner
-            ? () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => WelfareNumbersPage(roomid: widget.roomid)),
-                ).then((_) => _loadData());
-              }
-            : null,
+                onTap: _isOwner
+                    ? () {
+                        Navigator.of(context).push(
+                          CupertinoPageRoute(builder: (_) => WelfareNumbersPage(roomid: widget.roomid)),
+                        ).then((_) => _loadData());
+                      }
+                    : null,
         trailing: _isOwner
             ? const Icon(Icons.chevron_right, color: Color(0xFFCCCCCC), size: 18)
             : null,
@@ -992,26 +1032,26 @@ class _SaileiRoomInfoPageState extends State<SaileiRoomInfoPage> {
   // ============ 卡片 4：群主管理 ============
   Widget _buildOwnerPanel() {
     return _card([
-      _buildArrowRow('幸运抽奖设置', () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => LotterySettingPage(roomid: widget.roomid)),
-        );
-      }),
-      _buildArrowRow('玩家返点设置', () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => RebateSettingPage(roomid: widget.roomid)),
-        );
-      }),
-      _buildArrowRow('充值详情', () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => RoomTransactionsPage(roomid: widget.roomid)),
-        );
-      }),
-      _buildArrowRow('免死机器人流水', () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => ImmortalRobotLogPage(roomid: widget.roomid)),
-        );
-      }, value: '查看记录'),
+            _buildArrowRow('幸运抽奖设置', () {
+              Navigator.of(context).push(
+                CupertinoPageRoute(builder: (_) => LotterySettingPage(roomid: widget.roomid)),
+              );
+            }),
+            _buildArrowRow('玩家返点设置', () {
+              Navigator.of(context).push(
+                CupertinoPageRoute(builder: (_) => RebateSettingPage(roomid: widget.roomid)),
+              );
+            }),
+            _buildArrowRow('充值详情', () {
+              Navigator.of(context).push(
+                CupertinoPageRoute(builder: (_) => RoomTransactionsPage(roomid: widget.roomid)),
+              );
+            }),
+            _buildArrowRow('免死机器人流水', () {
+              Navigator.of(context).push(
+                CupertinoPageRoute(builder: (_) => ImmortalRobotLogPage(roomid: widget.roomid)),
+              );
+            }, value: '查看记录'),
       Container(
         constraints: const BoxConstraints(minHeight: 52),
         padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -1527,13 +1567,16 @@ class _MemberListModalState extends State<_MemberListModal> {
       color: Colors.transparent,
       child: Row(
         children: [
-          GestureDetector(
-            onTap: () => Navigator.pop(context),
-            child: const SizedBox(
-              width: 44, height: 54,
-              child: Icon(CupertinoIcons.back, color: Colors.black, size: 22),
-            ),
-          ),
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      behavior: HitTestBehavior.opaque, // ★ 强制拦截点击
+                      child: Container(
+                        width: 54,
+                        height: 54,
+                        alignment: Alignment.center,
+                        child: const Icon(CupertinoIcons.back, color: Colors.black, size: 24),
+                      ),
+                    ),
           Expanded(
             child: Text(
               '群成员(${widget.members.length})',
@@ -1618,14 +1661,23 @@ class _MemberListModalState extends State<_MemberListModal> {
               child: Container(
                 width: 38, height: 38,
                 color: const Color(0xFFE6F2FF),
-                                                              child: avatar.isEmpty
-                                                                  ? const Icon(Icons.person, color: Color(0xFF007AFF), size: 20)
-                                                                  : Image.network(
-                                                                      avatar,
-                                                                      width: 38, height: 38, fit: BoxFit.cover,
-                                                                      errorBuilder: (_, __, ___) =>
-                                                                          const Icon(Icons.person, color: Color(0xFF007AFF), size: 20),
-                                                                    ),
+                                                                              child: avatar.isEmpty
+                                                                                  ? const Icon(Icons.person, color: Color(0xFF007AFF), size: 20)
+                                                                                  : Image(
+                                                                                      image: CachedNetworkImageProvider(
+                                                                                        avatar,
+                                                                                        cacheManager: AppCacheManager.instance,
+                                                                                      ),
+                                                                                      width: 38, height: 38, fit: BoxFit.cover,
+                                                                                      gaplessPlayback: true, // ★★★ 新增这一行 ★★★
+                                                                                      frameBuilder: (_, child, __, ___) => child,
+                                                                                      loadingBuilder: (_, child, progress) {
+                                                                                        if (progress == null) return child;
+                                                                                        return const Icon(Icons.person, color: Color(0xFF007AFF), size: 20);
+                                                                                      },
+                                                                                      errorBuilder: (_, __, ___) =>
+                                                                                          const Icon(Icons.person, color: Color(0xFF007AFF), size: 20),
+                                                                                    ),
               ),
             ),
             const SizedBox(width: 12),

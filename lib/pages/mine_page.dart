@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../core/app_cache_manager.dart'; // ★ 引入全局缓存
+import 'package:flutter/cupertino.dart';
 
 import '../core/config.dart';
 import '../core/theme.dart';
@@ -68,39 +71,49 @@ class _MinePageState extends State<MinePage> {
     }
   }
 
-  void _openWeb(String url, String title) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => WebViewPage(url: url, title: title)),
-    );
-  }
+    void _openWeb(String url, String title) {
+      Navigator.of(context).push(
+        CupertinoPageRoute(builder: (_) => WebViewPage(url: url, title: title)), // ★ 修正为 WebViewPage
+      );
+    }
 
-  void _goPersonalData() {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const PersonalDataPage()),
-    ).then((changed) {
-      if (changed == true) _loadUser();
-    });
-  }
+    void _goPersonalData() {
+      Navigator.of(context).push(
+        CupertinoPageRoute(builder: (_) => const PersonalDataPage()),
+      ).then((changed) {
+        if (changed == true) _loadUser();
+      });
+    }
 
-  void _goWithdrawal() {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const WithdrawalPage()));
-  }
+    void _goWithdrawal() {
+      Navigator.of(context).push(
+        CupertinoPageRoute(builder: (_) => const WithdrawalPage()),
+      );
+    }
 
-  void _goRedlog() {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RedlogPage()));
-  }
+    void _goRedlog() {
+      Navigator.of(context).push(
+        CupertinoPageRoute(builder: (_) => const RedlogPage()), // ★ 修正为 RedlogPage
+      );
+    }
 
-  void _goRecharge() {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RechargePage()));
-  }
+    void _goRecharge() {
+      Navigator.of(context).push(
+        CupertinoPageRoute(builder: (_) => const RechargePage()), // ★ 修正为 RechargePage
+      );
+    }
 
-  void _goGonggao() {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const GonggaoPage()));
-  }
+    void _goGonggao() {
+      Navigator.of(context).push(
+        CupertinoPageRoute(builder: (_) => const GonggaoPage()), // ★ 修正为 GonggaoPage
+      );
+    }
 
-  void _goInstall() {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const InstallPage()));
-  }
+    void _goInstall() {
+      Navigator.of(context).push(
+        CupertinoPageRoute(builder: (_) => const InstallPage()), // ★ 修正为 InstallPage
+      );
+    }
 
   void _goDownload() => _openWeb(ApiConfig.downloadPage, '系统更新');
 
@@ -123,16 +136,14 @@ class _MinePageState extends State<MinePage> {
         decoration: const BoxDecoration(gradient: _bgGradient),
         child: Scaffold(
           backgroundColor: Colors.transparent,
-          body: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : SingleChildScrollView(
-                  padding: EdgeInsets.zero,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      SizedBox(height: MediaQuery.of(context).padding.top + 12),
-                      _buildProfileCard(),
-                      const SizedBox(height: 12),
+          body: SingleChildScrollView( // ★ 直接展示页面，不要判断 _loading
+            padding: EdgeInsets.zero,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                 SizedBox(height: MediaQuery.of(context).padding.top + 12),
+                 _buildProfileCard(), // 这里面会做骨架屏处理
+                 const SizedBox(height: 12),
                       // ★ 暂时下线：账户余额 / 提现 / 余额明细（需要时取消注释即可）
                       // _buildGroup([
                       //   _Row(
@@ -209,29 +220,56 @@ class _MinePageState extends State<MinePage> {
         ),
         child: Row(
           children: [
-            // 头像
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: avatar.isEmpty
-                  ? Container(
-                      width: 64, height: 64,
-                      color: const Color(0xFFF0ECFF),
-                      alignment: Alignment.center,
-                      child: const Icon(Icons.person,
-                          size: 32, color: AppColors.purple),
-                    )
-                  : Image.network(
-                      avatar,
-                      width: 64, height: 64, fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(
-                        width: 64, height: 64,
-                        color: const Color(0xFFF0ECFF),
-                        alignment: Alignment.center,
-                        child: const Icon(Icons.person,
-                            size: 32, color: AppColors.purple),
-                      ),
-                    ),
-            ),
+                        // 头像
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: avatar.isEmpty
+                                          ? Container(
+                                              width: 64, height: 64,
+                                              color: const Color(0xFFF0ECFF),
+                                              alignment: Alignment.center,
+                                              child: const Icon(Icons.person, size: 32, color: AppColors.purple),
+                                            )
+                                          : Image(
+                                              // ★ 1. 使用 Provider 代替组件，直接请求底层缓存
+                                              image: CachedNetworkImageProvider(
+                                                avatar,
+                                                cacheManager: AppCacheManager.instance, // 使用持久化缓存
+                                              ),
+                                              width: 64,
+                                              height: 64,
+                                              fit: BoxFit.cover,
+
+                                              // ★ 2. 终极防闪烁：帧构建器
+                                              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                                                // 如果是同步从本地加载出来的，直接返回 child，连一帧都不等
+                                                if (wasSynchronouslyLoaded) return child;
+                                                // 如果是网络下载的，直接返回 child，不做渐入动画
+                                                return child;
+                                              },
+
+                                              // ★ 3. 加载中显示占位图（只有真正没缓存、在下载时才会显示）
+                                              loadingBuilder: (context, child, loadingProgress) {
+                                                if (loadingProgress == null) return child;
+                                                return Container(
+                                                  width: 64, height: 64,
+                                                  color: const Color(0xFFF0ECFF),
+                                                  alignment: Alignment.center,
+                                                  child: const Icon(Icons.person, size: 32, color: AppColors.purple),
+                                                );
+                                              },
+
+                                              // ★ 4. 错误兜底
+                                              errorBuilder: (context, error, stackTrace) {
+                                                return Container(
+                                                  width: 64, height: 64,
+                                                  color: const Color(0xFFF0ECFF),
+                                                  alignment: Alignment.center,
+                                                  child: const Icon(Icons.person, size: 32, color: AppColors.purple),
+                                                );
+                                              },
+                                            ),
+                                    ),
             const SizedBox(width: 14),
             // 昵称 + 推广号
             Expanded(

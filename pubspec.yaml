@@ -1,7 +1,7 @@
 name: jianxin_app
 description: A new Flutter project.
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: '>=3.13.0 <4.0.0'
@@ -22,16 +22,20 @@ dependencies:
   qr_flutter: ^4.1.0
   shared_preferences: ^2.3.2
   audioplayers: ^6.1.0
+  package_info_plus: ^8.0.0
+  url_launcher: ^6.3.0
+
+  # ★★★ 移入正式依赖，让缓存生效 ★★★
+  cached_network_image: ^3.4.1
+  shimmer: ^3.0.0  # 为后续做骨架屏准备
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_localizations: # ★ 新增
+  flutter_localizations:
     sdk: flutter
-  cached_network_image: ^3.4.1
-  cupertino_icons: ^1.0.8
   flutter_lints: ^5.0.0
-  flutter_launcher_icons: ^0.14.4 # 建议使用最新版本
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true

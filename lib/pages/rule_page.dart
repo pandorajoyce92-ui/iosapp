@@ -5,6 +5,8 @@ import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../core/app_cache_manager.dart';
 
 import '../core/config.dart';
 import '../core/http_client.dart';
@@ -18,7 +20,7 @@ class RulePage extends StatefulWidget {
 }
 
 class _RulePageState extends State<RulePage> {
-  bool _loading = true;
+  bool _loading = false; // ★ 初始不显示全屏 loading
   bool _isOwner = false;
   bool _saving = false;
 
@@ -170,11 +172,10 @@ class _RulePageState extends State<RulePage> {
             children: [
               SizedBox(height: MediaQuery.of(context).padding.top),
               _buildHeader(),
-              Expanded(
-                child: _loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : _buildBody(),
-              ),
+                            Expanded(
+                              // ★ 直接渲染主体，不再全屏转圈
+                              child: _buildBody(),
+                            ),
             ],
           ),
         ),
@@ -188,19 +189,20 @@ class _RulePageState extends State<RulePage> {
       color: Colors.transparent,
       child: Stack(
         children: [
-          Positioned(
-            left: 8,
-            top: 0,
-            bottom: 0,
-            child: GestureDetector(
-              onTap: () => Navigator.of(context).pop(),
-              child: const SizedBox(
-                width: 40,
-                height: 44,
-                child: Icon(CupertinoIcons.back, color: Colors.black, size: 22),
-              ),
-            ),
-          ),
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: GestureDetector(
+                        onTap: () => Navigator.of(context).pop(),
+                        behavior: HitTestBehavior.opaque, // ★ 强制拦截，杜绝点击不灵敏
+                        child: Container(
+                          width: 50, height: 44,
+                          alignment: Alignment.center,
+                          child: const Icon(CupertinoIcons.back, color: Colors.black, size: 24),
+                        ),
+                      ),
+                    ),
           const Center(
             child: Text(
               '赔率介绍',
@@ -271,26 +273,30 @@ class _RulePageState extends State<RulePage> {
       padding: const EdgeInsets.all(16),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(8),
-        child: Image.network(
-          _savedImageUrl,
-          fit: BoxFit.contain,
-          errorBuilder: (_, __, ___) => Container(
-            height: 120,
-            alignment: Alignment.center,
-            child: const Text(
-              '图片加载失败',
-              style: TextStyle(color: Color(0xFF999999), fontSize: 13),
-            ),
-          ),
-          loadingBuilder: (_, child, progress) {
-            if (progress == null) return child;
-            return Container(
-              height: 200,
-              alignment: Alignment.center,
-              child: const CircularProgressIndicator(),
-            );
-          },
-        ),
+                child: Image(
+                  image: CachedNetworkImageProvider(
+                    _savedImageUrl,
+                    cacheManager: AppCacheManager.instance, // ★ 使用全局持久化缓存
+                  ),
+                  fit: BoxFit.contain,
+                  frameBuilder: (_, child, __, ___) => child, // ★ 秒出无闪烁
+                  errorBuilder: (_, __, ___) => Container(
+                    height: 120,
+                    alignment: Alignment.center,
+                    child: const Text(
+                      '图片加载失败',
+                      style: TextStyle(color: Color(0xFF999999), fontSize: 13),
+                    ),
+                  ),
+                  loadingBuilder: (_, child, progress) {
+                    if (progress == null) return child;
+                    return Container(
+                      height: 200,
+                      alignment: Alignment.center,
+                      child: const CircularProgressIndicator(),
+                    );
+                  },
+                ),
       ),
     );
   }

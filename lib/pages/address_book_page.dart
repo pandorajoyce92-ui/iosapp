@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/cupertino.dart'; // ★ 必须引入，为了使用 CupertinoPageRoute
+import '../core/app_cache_manager.dart'; // ★ 引入全局缓存
 
 import 'add_friend_page.dart';
 import 'new_friend_page.dart';
@@ -12,7 +15,7 @@ import '../core/config.dart';
 import '../core/theme.dart';
 import '../core/http_client.dart';
 import '../models/friend_item.dart';
-import '../core/data_cache.dart';                                   // ★ 新增
+import '../core/data_cache.dart';
 
 class AddressBookPage extends StatefulWidget {
   const AddressBookPage({super.key});
@@ -23,7 +26,7 @@ class AddressBookPage extends StatefulWidget {
 
 class _AddressBookPageState extends State<AddressBookPage> {
   List<FriendItem> _friends = [];
-  bool _loading = true;
+  bool _loading = false;
   bool _showPlusMenu = false;
 
   static const LinearGradient _bgGradient = LinearGradient(
@@ -42,46 +45,17 @@ class _AddressBookPageState extends State<AddressBookPage> {
   @override
   void initState() {
     super.initState();
+    // 进页面直接拉起请求，绝不等
     _loadFriends();
   }
 
-    Future<void> _loadFriends() async {
-      // ① 先用缓存秒渲染（仅在本地为空时）
-      if (_friends.isEmpty) {
-        final cached = DataCache.get('address_book_friends');
-        if (cached is List) {
-          try {
-            final list = cached
-                .map((e) => FriendItem.fromJson(Map<String, dynamic>.from(e)))
-                .toList();
-            if (mounted) {
-              setState(() {
-                _friends = list;
-                _loading = false;   // ★ 有缓存就立即关 loading
-              });
-            }
-          } catch (_) {}
-        }
-      }
-
-      // ② 如果本地已有数据，不再显示 loading（避免二次闪一下）
-      if (_friends.isEmpty && mounted) {
-        setState(() => _loading = true);
-      }
-
-      // ③ 后台请求
-      try {
-        final res = await HttpClient.instance.dio.post(
-          '${ApiConfig.entryUrl}&p=address_book',
-          options: Options(contentType: Headers.formUrlEncodedContentType),
-        );
-        dynamic data = res.data;
-        if (data is String) {
-          try { data = jsonDecode(data); } catch (_) {}
-        }
-
-        if (data is Map && data['status'] == 1 && data['result'] is List) {
-          final list = (data['result'] as List)
+  Future<void> _loadFriends() async {
+    // ① 读缓存
+    if (_friends.isEmpty) {
+      final cached = DataCache.get('address_book_friends');
+      if (cached is List) {
+        try {
+          final list = cached
               .map((e) => FriendItem.fromJson(Map<String, dynamic>.from(e)))
               .toList();
           if (mounted) {
@@ -90,20 +64,45 @@ class _AddressBookPageState extends State<AddressBookPage> {
               _loading = false;
             });
           }
-          // ★ 写缓存
-          await DataCache.set('address_book_friends', data['result']);
-        } else {
-          if (mounted) setState(() => _loading = false);
-        }
-      } catch (e) {
-        debugPrint('❌ 加载好友列表失败: $e');
-        if (mounted) setState(() => _loading = false);
+        } catch (_) {}
       }
     }
 
+    // ② 后台静默请求网络
+    try {
+      final res = await HttpClient.instance.dio.post(
+        '${ApiConfig.entryUrl}&p=address_book',
+        options: Options(contentType: Headers.formUrlEncodedContentType),
+      );
+      dynamic data = res.data;
+      if (data is String) {
+        try { data = jsonDecode(data); } catch (_) {}
+      }
+
+      if (data is Map && data['status'] == 1 && data['result'] is List) {
+        final list = (data['result'] as List)
+            .map((e) => FriendItem.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+        if (mounted) {
+          setState(() {
+            _friends = list;
+            _loading = false;
+          });
+        }
+        await DataCache.set('address_book_friends', data['result']);
+      } else {
+        if (mounted) setState(() => _loading = false);
+      }
+    } catch (e) {
+      debugPrint('❌ 加载好友列表失败: $e');
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   Future<void> _openFriendDetail(int fuid) async {
     final result = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => PersonDetailPage(fuid: fuid)),
+      // ★ 换成了 CupertinoPageRoute
+      CupertinoPageRoute(builder: (_) => PersonDetailPage(fuid: fuid)),
     );
     if (result == true) _loadFriends();
   }
@@ -130,73 +129,77 @@ class _AddressBookPageState extends State<AddressBookPage> {
                     RefreshIndicator(
                       onRefresh: _loadFriends,
                       color: const Color(0xFF007AFF),
-                      child: _loading
-                          ? const Center(child: CircularProgressIndicator())
-                          : ListView(
-                              padding: const EdgeInsets.only(top: 8, bottom: 20),
+                      // ★ 关键修改：去掉了全屏 loading 的三元判断
+                      child: ListView(
+                        padding: const EdgeInsets.only(top: 8, bottom: 20),
+                        children: [
+                          Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 12),
+                            decoration: BoxDecoration(
+                              color: _itemBg,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            clipBehavior: Clip.antiAlias,
+                            child: Column(
                               children: [
-                                // ★ 一整张圆角卡片：新的朋友 + 群聊 + 好友列表
-                                Container(
-                                  margin: const EdgeInsets.symmetric(horizontal: 12),
-                                  decoration: BoxDecoration(
-                                    color: _itemBg,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  clipBehavior: Clip.antiAlias,
-                                  child: Column(
-                                    children: [
-                                      _buildActionRow(
-                                        icon: Icons.person_add_alt_1,
-                                        iconBg: const Color(0xFF007AFF),
-                                        title: '新的朋友',
-                                        onTap: () {
-                                          Navigator.of(context).push(
-                                            MaterialPageRoute(
-                                                builder: (_) => const NewFriendPage()),
-                                          );
-                                        },
-                                      ),
-                                      const Divider(
-                                        height: 1,
-                                        thickness: 1,
-                                        indent: 68,
-                                        color: Color(0xFFF0F0F4),
-                                      ),
-                                      _buildActionRow(
-                                        icon: Icons.group,
-                                        iconBg: const Color(0xFF07C160),
-                                        title: '群聊',
-                                        onTap: () {
-                                          Navigator.of(context).push(
-                                            MaterialPageRoute(
-                                                builder: (_) => const MyGroupsPage()),
-                                          );
-                                        },
-                                      ),
-                                      // ★ 好友列表：和上面共用同一张卡片
-                                      if (_friends.isNotEmpty) ...[
-                                        const Divider(
-                                          height: 1,
-                                          thickness: 1,
-                                          indent: 68,
-                                          color: Color(0xFFF0F0F4),
-                                        ),
-                                        ..._friends.map(_buildFriendItem),
-                                      ] else ...[
-                                        const Divider(
-                                          height: 1,
-                                          thickness: 1,
-                                          color: Color(0xFFF0F0F4),
-                                        ),
-                                        _buildEmpty(),
-                                      ],
-                                    ],
-                                  ),
+                                _buildActionRow(
+                                  icon: Icons.person_add_alt_1,
+                                  iconBg: const Color(0xFF007AFF),
+                                  title: '新的朋友',
+                                  onTap: () {
+                                    Navigator.of(context).push(
+                                      // ★ 换成了 CupertinoPageRoute
+                                      CupertinoPageRoute(
+                                          builder: (_) => const NewFriendPage()),
+                                    );
+                                  },
                                 ),
+                                const Divider(
+                                  height: 1,
+                                  thickness: 1,
+                                  indent: 68,
+                                  color: Color(0xFFF0F0F4),
+                                ),
+                                _buildActionRow(
+                                  icon: Icons.group,
+                                  iconBg: const Color(0xFF07C160),
+                                  title: '群聊',
+                                  onTap: () {
+                                    Navigator.of(context).push(
+                                      // ★ 换成了 CupertinoPageRoute
+                                      CupertinoPageRoute(
+                                          builder: (_) => const MyGroupsPage()),
+                                    );
+                                  },
+                                ),
+                                // ★ 好友列表逻辑
+                                if (_friends.isNotEmpty) ...[
+                                  const Divider(
+                                    height: 1,
+                                    thickness: 1,
+                                    indent: 68,
+                                    color: Color(0xFFF0F0F4),
+                                  ),
+                                  ..._friends.map(_buildFriendItem),
+                                ] else ...[
+                                  const Divider(
+                                    height: 1,
+                                    thickness: 1,
+                                    color: Color(0xFFF0F0F4),
+                                  ),
+                                  _loading
+                                    ? const Padding(
+                                        padding: EdgeInsets.symmetric(vertical: 40),
+                                        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                                      )
+                                    : _buildEmpty(),
+                                ],
                               ],
                             ),
+                          ),
+                        ],
+                      ),
                     ),
-                    // ★ 关闭层必须在菜单之前，否则会盖住菜单
                     if (_showPlusMenu)
                       Positioned.fill(
                         child: GestureDetector(
@@ -248,7 +251,6 @@ class _AddressBookPageState extends State<AddressBookPage> {
     );
   }
 
-  /// 顶部功能行（新的朋友 / 群聊）
   Widget _buildActionRow({
     required IconData icon,
     required Color iconBg,
@@ -291,7 +293,6 @@ class _AddressBookPageState extends State<AddressBookPage> {
     );
   }
 
-  /// 好友行（不再有独立背景，在卡片内部）
   Widget _buildFriendItem(FriendItem friend) {
     return GestureDetector(
       onTap: () => _openFriendDetail(friend.fuid),
@@ -301,41 +302,48 @@ class _AddressBookPageState extends State<AddressBookPage> {
         child: Row(
           children: [
             const SizedBox(width: 16),
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(10),
-                                      child: friend.avatarUrl.isEmpty
-                                          ? _defaultAvatar()
-                                          : Image.network(
-                                              friend.avatarUrl,
-                                              width: 44,
-                                              height: 44,
-                                              fit: BoxFit.cover,
-                                              errorBuilder: (_, __, ___) => _defaultAvatar(),
-                                            ),
-                                    ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Row(
-                children: [
-                  Flexible(
-                    child: Text(
-                      friend.nickname,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.black,
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: friend.avatarUrl.isEmpty
+                  ? _defaultAvatar()
+                  : Image(
+                      image: CachedNetworkImageProvider(
+                        friend.avatarUrl,
+                        cacheManager: AppCacheManager.instance,
                       ),
+                      width: 44, height: 44, fit: BoxFit.cover,
+                      gaplessPlayback: true, // ★★★ 新增 ★★★
+                      frameBuilder: (_, child, __, ___) => child,
+                      loadingBuilder: (_, child, progress) {
+                        if (progress == null) return child;
+                        return _defaultAvatar();
+                      },
+                      errorBuilder: (_, __, ___) => _defaultAvatar(),
                     ),
-                  ),
-                  if (friend.unread > 0) ...[
-                    const SizedBox(width: 8),
-                    _buildBadge(friend.unread),
-                  ],
-                ],
-              ),
             ),
+            const SizedBox(width: 12),
+                        Expanded(
+                          child: Row(
+                            children: [
+                              Expanded( // ★ 修改：把 Flexible 改成 Expanded，让名字占满剩余空间，把红点推到最右边
+                                child: Text(
+                                  friend.nickname,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                              ),
+                              if (friend.unread > 0) ...[
+                                const SizedBox(width: 8),
+                                _buildBadge(friend.unread), // 现在它会被推到最右侧了
+                              ],
+                            ],
+                          ),
+                        ),
             const SizedBox(width: 16),
           ],
         ),
@@ -352,21 +360,22 @@ class _AddressBookPageState extends State<AddressBookPage> {
     );
   }
 
-  Widget _buildBadge(int count) {
-    return Container(
-      constraints: const BoxConstraints(minWidth: 18),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: const Color(0xFFE94848),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        count > 99 ? '99+' : '$count',
-        style: const TextStyle(color: Colors.white, fontSize: 10, height: 1),
-      ),
-    );
-  }
+    Widget _buildBadge(int count) {
+      return Container(
+        height: 18, // ★ 关键修改：强制固定高度为 18
+        constraints: const BoxConstraints(minWidth: 18),
+        padding: const EdgeInsets.symmetric(horizontal: 5),
+        decoration: BoxDecoration(
+          color: const Color(0xFFE94848),
+          borderRadius: BorderRadius.circular(9), // ★ 圆角改为高度的一半，变成完美圆形/胶囊
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          count > 99 ? '99+' : '$count',
+          style: const TextStyle(color: Colors.white, fontSize: 10, height: 1),
+        ),
+      );
+    }
 
   Widget _buildEmpty() {
     return const Padding(
@@ -397,7 +406,8 @@ class _AddressBookPageState extends State<AddressBookPage> {
               _menuItem('添加朋友', () {
                 setState(() => _showPlusMenu = false);
                 Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const AddFriendPage()),
+                  // ★ 换成了 CupertinoPageRoute
+                  CupertinoPageRoute(builder: (_) => const AddFriendPage()),
                 );
               }),
               _menuItem('扫一扫', () {

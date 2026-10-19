@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../core/config.dart';
 import '../core/theme.dart';
 import '../core/http_client.dart';
+import '../core/version_checker.dart';
 import 'main_tab_page.dart';
 import 'register_page.dart';
 import 'forget_page.dart';
@@ -38,6 +39,10 @@ class _LoginPageState extends State<LoginPage> {
   void initState() {
     super.initState();
     _fillSaved();
+    // ★ 新增：页面渲染完成后，静默检查版本更新
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          VersionChecker.check(context);
+        });
   }
 
   Future<void> _fillSaved() async {

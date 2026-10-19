@@ -4,15 +4,18 @@ import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:flutter/cupertino.dart'; // 新增，用于 CupertinoPageRoute
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../core/app_cache_manager.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:image_picker/image_picker.dart';
 
 import '../core/config.dart';
 import '../core/http_client.dart';
 import '../core/sound_player.dart';
-import '../core/data_cache.dart';                                   // ★ 新增
+import '../core/data_cache.dart';
 import '../widgets/red_packet_widgets.dart';
 import '../widgets/send_red_packet_sheet.dart';
 import 'chat_room_page.dart';
@@ -51,7 +54,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
   bool _hasText = false;
   final FocusNode _inputFocus = FocusNode();
 
-  bool _loading = true;
+  bool _loading = false; // 初始不显示全屏 loading
   final ScrollController _scrollCtrl = ScrollController();
   bool _isAtBottom = true;
 
@@ -66,112 +69,31 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     super.initState();
     _scrollCtrl.addListener(_onScroll);
     _inputFocus.addListener(_onInputFocusChanged);
+
+    // 1. 优先读取本地缓存，瞬间渲染（0延迟，无转圈）
+    _loadCacheFirst();
+
+    // 2. 随后静默拉取最新数据和建立连接
     _loadInitial();
     _connectSocket();
+
     _statusTimer = Timer.periodic(
       const Duration(seconds: 10),
       (_) => _pollRedPacketStatus(),
     );
   }
 
-  @override
-  void dispose() {
-    _statusTimer?.cancel();
-    _cacheWriteTimer?.cancel();
-    _socket?.disconnect();
-    _scrollCtrl.removeListener(_onScroll);
-    _scrollCtrl.dispose();
-    _inputFocus.unfocus();
-    _inputFocus.removeListener(_onInputFocusChanged);
-    _inputFocus.dispose();
-    _inputCtrl.dispose();
-    super.dispose();
-  }
-
-    Future<void> _loadInitial() async {
-      // ① 先用缓存秒渲染（5 分钟内有效）
-      if (_messages.isEmpty) {
-        final cached = DataCache.get('rp_room_${widget.roomid}');
-        final cachedTime = DataCache.getTime('rp_room_${widget.roomid}');
-        if (cached is Map &&
-            cachedTime != null &&
-            DateTime.now().difference(cachedTime).inMinutes < 5) {
-          try {
-            final r = Map<String, dynamic>.from(cached);
-            final member = r['member'] is Map
-                ? Map<String, dynamic>.from(r['member'])
-                : <String, dynamic>{};
-            final roominfo = r['roominfo'] is Map
-                ? Map<String, dynamic>.from(r['roominfo'])
-                : <String, dynamic>{};
-            final list = (r['old_messages'] as List? ?? [])
-                .map((e) => Map<String, dynamic>.from(e))
-                .toList();
-            final fins = (r['finances'] as List? ?? [])
-                .map((e) => Map<String, dynamic>.from(e))
-                .toList();
-
-            if (mounted) {
-              setState(() {
-                _myUid = int.tryParse(member['id']?.toString() ?? '0') ?? 0;
-                _ownerUid = int.tryParse(r['owner_uid']?.toString() ?? '0') ?? 0;
-                _announcement = roominfo['announcement']?.toString() ?? '';
-                _roomMin = double.tryParse(r['min']?.toString() ?? '0') ?? 0;
-                _roomMax = double.tryParse(r['max']?.toString() ?? '999999') ?? 999999;
-                _noPayPwd = (r['nopaypwd']?.toString() == '1');
-                _finances = fins;
-
-                _messages.clear();
-                for (final m in list) {
-                  if (m['type']?.toString() == '7') continue;
-                  if (m['type']?.toString() == '0' && m['contents'] is Map) {
-                    final c = m['contents'] as Map;
-                    final setid = c['setid']?.toString() ?? '';
-                    if (_myClaimed.contains(setid)) {
-                      c['isget'] = 1;
-                    }
-                  }
-                  _messages.add(m);
-                }
-                _loading = false;
-              });
-              _scrollToBottom(animate: false);
-            }
-          } catch (_) {}
-        }
-      }
-
-      // ② 后台请求
+  void _loadCacheFirst() {
+    final cached = DataCache.get('rp_room_${widget.roomid}');
+    if (cached is Map) {
       try {
-        final res = await HttpClient.instance.dio.post(
-          '${ApiConfig.redpackets}&roomid=${widget.roomid}',
-          data: {'op': 'get_data', 'roomid': widget.roomid},
-          options: Options(
-            contentType: Headers.formUrlEncodedContentType,
-            responseType: ResponseType.plain,
-          ),
-        );
-        dynamic data = res.data;
-        if (data is String) {
-          try { data = jsonDecode(data); } catch (_) {}
-        }
-        if (data is Map && data['status'] == 1 && data['result'] is Map) {
-          final r = Map<String, dynamic>.from(data['result']);
-          final member = r['member'] is Map
-              ? Map<String, dynamic>.from(r['member'])
-              : <String, dynamic>{};
-          final roominfo = r['roominfo'] is Map
-              ? Map<String, dynamic>.from(r['roominfo'])
-              : <String, dynamic>{};
+        final r = Map<String, dynamic>.from(cached);
+        final member = r['member'] is Map ? Map<String, dynamic>.from(r['member']) : <String, dynamic>{};
+        final roominfo = r['roominfo'] is Map ? Map<String, dynamic>.from(r['roominfo']) : <String, dynamic>{};
+        final list = (r['old_messages'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)).toList();
+        final fins = (r['finances'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)).toList();
 
-          final list = (r['old_messages'] as List? ?? [])
-              .map((e) => Map<String, dynamic>.from(e))
-              .toList();
-          final fins = (r['finances'] as List? ?? [])
-              .map((e) => Map<String, dynamic>.from(e))
-              .toList();
-
-          if (!mounted) return;
+        if (mounted) {
           setState(() {
             _myUid = int.tryParse(member['id']?.toString() ?? '0') ?? 0;
             _ownerUid = int.tryParse(r['owner_uid']?.toString() ?? '0') ?? 0;
@@ -196,37 +118,92 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
             _loading = false;
           });
           _scrollToBottom(animate: false);
-
-          // ★ 写缓存
-          await DataCache.set('rp_room_${widget.roomid}', data['result']);
-        } else {
-          if (mounted) setState(() => _loading = false);
         }
-      } catch (e) {
-        debugPrint('❌ [room get_data] $e');
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _loadInitial() async {
+    try {
+      final res = await HttpClient.instance.dio.post(
+        '${ApiConfig.redpackets}&roomid=${widget.roomid}',
+        data: {'op': 'get_data', 'roomid': widget.roomid},
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          responseType: ResponseType.plain,
+        ),
+      );
+      dynamic data = res.data;
+      if (data is String) {
+        try { data = jsonDecode(data); } catch (_) {}
+      }
+      // ★★★ 拦截被踢状态 ★★★
+            if (data is Map && data['status'] == 2) {
+              _toast(data['msg']?.toString() ?? '您已被移出该群聊');
+              Navigator.of(context).popUntil((route) => route.isFirst);
+              return;
+            }
+
+      if (data is Map && data['status'] == 1 && data['result'] is Map) {
+        final r = Map<String, dynamic>.from(data['result']);
+        final member = r['member'] is Map ? Map<String, dynamic>.from(r['member']) : <String, dynamic>{};
+        final roominfo = r['roominfo'] is Map ? Map<String, dynamic>.from(r['roominfo']) : <String, dynamic>{};
+        final list = (r['old_messages'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)).toList();
+        final fins = (r['finances'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)).toList();
+
+        if (!mounted) return;
+        setState(() {
+          _myUid = int.tryParse(member['id']?.toString() ?? '0') ?? 0;
+          _ownerUid = int.tryParse(r['owner_uid']?.toString() ?? '0') ?? 0;
+          _announcement = roominfo['announcement']?.toString() ?? '';
+          _roomMin = double.tryParse(r['min']?.toString() ?? '0') ?? 0;
+          _roomMax = double.tryParse(r['max']?.toString() ?? '999999') ?? 999999;
+          _noPayPwd = (r['nopaypwd']?.toString() == '1');
+          _finances = fins;
+
+          _messages.clear();
+          for (final m in list) {
+            if (m['type']?.toString() == '7') continue;
+            if (m['type']?.toString() == '0' && m['contents'] is Map) {
+              final c = m['contents'] as Map;
+              final setid = c['setid']?.toString() ?? '';
+              if (_myClaimed.contains(setid)) {
+                c['isget'] = 1;
+              }
+            }
+            _messages.add(m);
+          }
+          _loading = false;
+        });
+        _scrollToBottom(animate: false);
+
+        await DataCache.set('rp_room_${widget.roomid}', data['result']);
+      } else {
         if (mounted) setState(() => _loading = false);
       }
+    } catch (e) {
+      debugPrint('❌ [room get_data] $e');
+      if (mounted) setState(() => _loading = false);
     }
+  }
 
-    /// 节流写缓存：800ms 内多次调用只写一次
-    /// 从当前 State 重建 JSON，避免直接从 _messages 存（缺少 member/roominfo 等字段）
-    void _scheduleCacheWrite() {
-      _cacheWriteTimer?.cancel();
-      _cacheWriteTimer = Timer(const Duration(milliseconds: 800), () async {
-        if (!mounted) return;
-        final payload = <String, dynamic>{
-          'member': {'id': _myUid},
-          'roominfo': {'announcement': _announcement},
-          'owner_uid': _ownerUid,
-          'min': _roomMin,
-          'max': _roomMax,
-          'nopaypwd': _noPayPwd ? 1 : 0,
-          'finances': _finances,
-          'old_messages': _messages,
-        };
-        await DataCache.set('rp_room_${widget.roomid}', payload);
-      });
-    }
+  void _scheduleCacheWrite() {
+    _cacheWriteTimer?.cancel();
+    _cacheWriteTimer = Timer(const Duration(milliseconds: 800), () async {
+      if (!mounted) return;
+      final payload = <String, dynamic>{
+        'member': {'id': _myUid},
+        'roominfo': {'announcement': _announcement},
+        'owner_uid': _ownerUid,
+        'min': _roomMin,
+        'max': _roomMax,
+        'nopaypwd': _noPayPwd ? 1 : 0,
+        'finances': _finances,
+        'old_messages': _messages,
+      };
+      await DataCache.set('rp_room_${widget.roomid}', payload);
+    });
+  }
 
   void _connectSocket() {
     try {
@@ -238,7 +215,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
           'reconnection': true,
           'reconnectionAttempts': 9999,
           'reconnectionDelay': 2000,
-          'forceNew': true,   // ★★★ 每次独立 socket，不复用
+          'forceNew': true,
         },
       );
 
@@ -282,6 +259,31 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
         }
       });
 
+            // ★★★ 新增：监听群主踢人通知 ★★★
+            _socket!.on('new_msg', (data) {
+              try {
+                dynamic msg = data;
+                if (msg is String) {
+                  msg = msg.replaceAll('&quot;', '"');
+                  try { msg = jsonDecode(msg); } catch (_) {}
+                }
+                if (msg is Map && msg['type'] == 'kick') {
+                  // 收到踢人通知，弹出提示并踢回大厅
+                  _toast('您已被群主移出该群聊');
+
+                  // 这里需要引用你的大厅页面 GamePage
+                  // 如果是底部导航栏，通常用 Navigator.popUntil 回到最底层
+                  Future.delayed(const Duration(milliseconds: 500), () {
+                    if (mounted) {
+                      Navigator.of(context).popUntil((route) => route.isFirst);
+                    }
+                  });
+                }
+              } catch (e) {
+                debugPrint('❌ [kick handler] $e');
+              }
+            });
+
       _socket!.onDisconnect((_) => debugPrint('⚠️ socket disconnected'));
       _socket!.onConnectError((e) => debugPrint('❌ socket error: $e'));
 
@@ -291,22 +293,22 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     }
   }
 
-    void _handleDoneBroadcast(Map<String, dynamic> m) {
-      final contents = m['contents'];
-      if (contents is! Map) return;
-      final redid = contents['redid']?.toString();
-      if (redid == null) return;
-      for (final msg in _messages) {
-        if (msg['type']?.toString() == '0' && msg['contents'] is Map) {
-          final c = msg['contents'] as Map;
-          if (c['setid']?.toString() == redid) {
-            c['nums'] = 0;
-          }
+  void _handleDoneBroadcast(Map<String, dynamic> m) {
+    final contents = m['contents'];
+    if (contents is! Map) return;
+    final redid = contents['redid']?.toString();
+    if (redid == null) return;
+    for (final msg in _messages) {
+      if (msg['type']?.toString() == '0' && msg['contents'] is Map) {
+        final c = msg['contents'] as Map;
+        if (c['setid']?.toString() == redid) {
+          c['nums'] = 0;
         }
       }
-      if (mounted) setState(() {});
-      _scheduleCacheWrite();   // ★ 新增
     }
+    if (mounted) setState(() {});
+    _scheduleCacheWrite();
+  }
 
   Future<void> _pollRedPacketStatus() async {
     try {
@@ -322,11 +324,17 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
       if (data is String) {
         try { data = jsonDecode(data); } catch (_) {}
       }
+
+      // ★★★ 拦截被踢状态 ★★★
+            if (data is Map && data['status'] == 2) {
+              _statusTimer?.cancel(); // 停止轮询
+              _toast(data['msg']?.toString() ?? '您已被移出该群聊');
+              Navigator.of(context).popUntil((route) => route.isFirst);
+              return;
+            }
       if (data is Map && data['status'] == 1 && data['result'] is Map) {
         final r = Map<String, dynamic>.from(data['result']);
-        final list = (r['old_messages'] as List? ?? [])
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
+        final list = (r['old_messages'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)).toList();
         final redMap = <String, Map<String, dynamic>>{};
         for (final m in list) {
           if (m['type']?.toString() == '0' && m['contents'] is Map) {
@@ -370,7 +378,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
         }
         if (changed && mounted) {
           setState(() {});
-          _scheduleCacheWrite();   // ★ 新增
+          _scheduleCacheWrite();
         }
       }
     } catch (e) {
@@ -378,40 +386,40 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     }
   }
 
-    Future<void> _sendText() async {
-      final content = _inputCtrl.text.trim();
-      if (content.isEmpty) return;
+  Future<void> _sendText() async {
+    final content = _inputCtrl.text.trim();
+    if (content.isEmpty) return;
 
-      final isRecharge = RegExp(r'^充值\s*\d+$').hasMatch(content);
-      final isWithdraw = RegExp(r'^提现\s*\d+$').hasMatch(content);
-      final needJump = isRecharge || isWithdraw;
+    final isRecharge = RegExp(r'^充值\s*\d+$').hasMatch(content);
+    final isWithdraw = RegExp(r'^提现\s*\d+$').hasMatch(content);
+    final needJump = isRecharge || isWithdraw;
 
-      try {
-        final res = await HttpClient.instance.dio.post(
-          '${ApiConfig.redpackets}&roomid=${widget.roomid}',
-          data: {'op': 'setmess', 'type': 6, 'content': content},
-          options: Options(
-            contentType: Headers.formUrlEncodedContentType,
-            responseType: ResponseType.plain,
-          ),
-        );
-        dynamic data = res.data;
-        if (data is String) {
-          try { data = jsonDecode(data); } catch (_) {}
+    try {
+      final res = await HttpClient.instance.dio.post(
+        '${ApiConfig.redpackets}&roomid=${widget.roomid}',
+        data: {'op': 'setmess', 'type': 6, 'content': content},
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          responseType: ResponseType.plain,
+        ),
+      );
+      dynamic data = res.data;
+      if (data is String) {
+        try { data = jsonDecode(data); } catch (_) {}
+      }
+      if (data is Map) {
+        if (data['status']?.toString() == '0') {
+          _toast(data['result']?.toString() ?? data['msg']?.toString() ?? '发送失败');
+          return;
         }
-        if (data is Map) {
-          if (data['status']?.toString() == '0') {
-            _toast(data['result']?.toString() ?? data['msg']?.toString() ?? '发送失败');
-            return;
-          }
-          _inputCtrl.clear();
-          setState(() => _hasText = false);
-          _inputFocus.unfocus();
+        _inputCtrl.clear();
+        setState(() => _hasText = false);
+        _inputFocus.unfocus();
 
+        if (needJump) {
           final redirect = data['redirect']?.toString() ?? '';
           String targetFuid = '';
 
-          // 1. 尝试从后端返回的 redirect 链接中提取 fuid
           if (redirect.isNotEmpty) {
             final match = RegExp(r'[?&]fuid=(\d+)').firstMatch(redirect);
             if (match != null) {
@@ -419,44 +427,39 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
             }
           }
 
-          // 2. 兜底：如果没从链接里拿到，就从本地已缓存的财务列表里取第一个
           if (targetFuid.isEmpty && _finances.isNotEmpty) {
             targetFuid = _finances.first['id']?.toString() ?? '';
           }
 
-          // 3. 只要涉及充值/提现口令，或者确实找到了 fuid，就执行跳转逻辑
-          if (needJump || targetFuid.isNotEmpty) {
-            _toast('申请已提交，正在跳转...');
-            await Future.delayed(const Duration(milliseconds: 600));
+          _toast('申请已提交，正在跳转...');
+          await Future.delayed(const Duration(milliseconds: 600));
 
-            if (targetFuid.isNotEmpty) {
-              final int fuid = int.tryParse(targetFuid) ?? 0;
-              if (fuid > 0 && mounted) {
-                // ★ 直接跳转到原生的私聊页面
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => ChatRoomPage(fuid: fuid)),
-                );
-                return;
-              }
-            }
-
-            // 4. 极端兜底：如果既没拿到 fuid，又有 redirect 网页链接，才退化为 WebView
-            if (redirect.isNotEmpty && mounted) {
+          if (targetFuid.isNotEmpty) {
+            final int fuid = int.tryParse(targetFuid) ?? 0;
+            if (fuid > 0 && mounted) {
               Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => WebViewPage(url: redirect, title: '财务'),
-                ),
+                CupertinoPageRoute(builder: (_) => ChatRoomPage(fuid: fuid)),
               );
-            } else {
-              _toast('暂无财务人员，请前往通讯录查找');
+              return;
             }
           }
+
+          if (redirect.isNotEmpty && mounted) {
+            Navigator.of(context).push(
+              CupertinoPageRoute(
+                builder: (_) => WebViewPage(url: redirect, title: '财务'),
+              ),
+            );
+          } else {
+            _toast('暂无财务人员，请前往通讯录查找');
+          }
         }
-      } catch (e) {
-        debugPrint('❌ [setmess] $e');
-        _toast('网络错误，请重试');
       }
+    } catch (e) {
+      debugPrint('❌ [setmess] $e');
+      _toast('网络错误，请重试');
     }
+  }
 
   void _onScroll() {
     if (!_scrollCtrl.hasClients) return;
@@ -505,70 +508,67 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
         .replaceAll('&#39;', "'");
   }
 
-    // ============ UI ============
-    @override
-    Widget build(BuildContext context) {
-      return AnnotatedRegion<SystemUiOverlayStyle>(
-        value: const SystemUiOverlayStyle(
-          statusBarColor: Colors.transparent,
-          statusBarIconBrightness: Brightness.dark,
-          statusBarBrightness: Brightness.light,
-        ),
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFFDBEAFE), Color(0xFFDCF5E8), Color(0xFFDCFCE7)],
-              stops: [0.0, 0.5, 1.0],
-            ),
+  @override
+  Widget build(BuildContext context) {
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
+      ),
+      child: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFDBEAFE), Color(0xFFDCF5E8), Color(0xFFDCFCE7)],
+            stops: [0.0, 0.5, 1.0],
           ),
-          child: Scaffold(
-            backgroundColor: Colors.transparent,
-            body: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: () {
-                if (_inputFocus.hasFocus) _inputFocus.unfocus();
-                if (_showMorePanel && mounted) {
-                  setState(() => _showMorePanel = false);
-                }
-              },
-              child: Column(
-                children: [
-                  SizedBox(height: MediaQuery.of(context).padding.top),
-                  _buildHeader(),
-                  Expanded(
-                    child: _loading
-                        ? const Center(child: CircularProgressIndicator())
-                        : _buildMessageList(),
+        ),
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: () {
+              if (_inputFocus.hasFocus) _inputFocus.unfocus();
+              if (_showMorePanel && mounted) {
+                setState(() => _showMorePanel = false);
+              }
+            },
+            child: Column(
+              children: [
+                SizedBox(height: MediaQuery.of(context).padding.top),
+                _buildHeader(),
+                Expanded(
+                  // ★ 彻底去掉全屏 loading，直接渲染列表
+                  child: _buildMessageList(),
+                ),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.transparent,
+                    border: Border(top: BorderSide(color: Colors.white.withOpacity(0.2))),
                   ),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.transparent,
-                      border: Border(top: BorderSide(color: Colors.white.withOpacity(0.2))),
-                    ),
-                    padding: EdgeInsets.only(
-                      bottom: MediaQuery.of(context).padding.bottom > 0
-                          ? MediaQuery.of(context).padding.bottom + 16
-                          : 24,
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _buildInputBar(),
-                        _buildFunctionPanel(),
-                      ],
-                    ),
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(context).padding.bottom > 0
+                        ? MediaQuery.of(context).padding.bottom + 16
+                        : 24,
                   ),
-                ],
-              ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildInputBar(),
+                      _buildFunctionPanel(),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ),
-      );
-    }
+      ),
+    );
+  }
 
-  // ---- 顶部栏（含群公告跑马灯） ----
   Widget _buildHeader() {
     return Container(
       height: 44,
@@ -577,12 +577,14 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
         children: [
           GestureDetector(
             onTap: () => Navigator.of(context).pop(),
-            child: const SizedBox(
-              width: 40, height: 44,
-              child: Icon(CupertinoIcons.back, color: Colors.black, size: 22),
+            behavior: HitTestBehavior.opaque, // 强制整个 50x44 区域都可以点击
+            child: Container(
+              width: 50,
+              height: 44,
+              alignment: Alignment.center,
+              child: const Icon(CupertinoIcons.back, color: Colors.black, size: 24),
             ),
           ),
-          // ★ 群公告跑马灯（保留）
           Expanded(
             child: _announcement.isEmpty
                 ? const Text(
@@ -613,7 +615,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
           GestureDetector(
             onTap: () {
               Navigator.of(context).push(
-                MaterialPageRoute(
+                CupertinoPageRoute(
                   builder: (_) => SaileiRoomInfoPage(roomid: widget.roomid),
                 ),
               );
@@ -628,7 +630,6 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     );
   }
 
-  // ---- 消息列表 ----
   Widget _buildMessageList() {
     if (_messages.isEmpty) {
       return const Center(
@@ -678,7 +679,6 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
   Widget _buildRedPacketBubble(Map<String, dynamic> c, bool isSelf) {
     final nickname = c['nickname']?.toString() ?? '';
     final avatar = c['avatar']?.toString() ?? '';
-    // ★★★ 封盘提示：走单独分支 ★★★
     if (int.tryParse(c['is_notice']?.toString() ?? '0') == 1) {
       return _buildNoticeBubble(c, isSelf);
     }
@@ -708,89 +708,89 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
               opacity: inactive ? 0.6 : 1,
               child: GestureDetector(
                 onTap: () => _onRedPacketTap(c),
-                                                child: Container(
-                                                  width: 240,
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.white,
-                                                    borderRadius: BorderRadius.circular(8),
-                                                    boxShadow: [
-                                                      BoxShadow(
-                                                        color: const Color(0xFFE94848).withOpacity(0.12),
-                                                        blurRadius: 6,
-                                                        offset: const Offset(0, 2),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                  clipBehavior: Clip.antiAlias,
-                                                  child: Column(
-                                                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                                                    children: [
-                                                      Container(
-                                                        height: 70,
-                                                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                                                        decoration: const BoxDecoration(
-                                                          gradient: LinearGradient(
-                                                            colors: [Color(0xFFFF7A38), Color(0xFFE94848)],
-                                                            begin: Alignment.topLeft,
-                                                            end: Alignment.bottomRight,
-                                                          ),
-                                                        ),
-                                                        child: Stack(
-                                                          children: [
-                                                            Column(
-                                                              mainAxisAlignment: MainAxisAlignment.center,
-                                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                                              children: [
-                                                                Text(
-                                                                  '$gold-$totalNums-[$boom]',
-                                                                  style: const TextStyle(
-                                                                    fontSize: 16,
-                                                                    fontWeight: FontWeight.w600,
-                                                                    color: Colors.white,
-                                                                  ),
-                                                                ),
-                                                                const SizedBox(height: 2),
-                                                                Text(
-                                                                  bottomText,
-                                                                  style: TextStyle(
-                                                                    fontSize: 11,
-                                                                    color: Colors.white.withOpacity(0.9),
-                                                                  ),
-                                                                ),
-                                                              ],
-                                                            ),
-                                                            Positioned(
-                                                              right: 0, top: 0, bottom: 0,
-                                                              child: Center(
-                                                                child: _RedPacketIcon(
-                                                                  width: 34,
-                                                                  height: 40,
-                                                                  isInactive: inactive,
-                                                                ),
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                      Container(
-                                                        height: 24,
-                                                        alignment: Alignment.centerLeft,
-                                                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                                                        decoration: const BoxDecoration(
-                                                          gradient: LinearGradient(
-                                                            colors: [Color(0xFFFF7A38), Color(0xFFE94848)],
-                                                            begin: Alignment.topLeft,
-                                                            end: Alignment.bottomRight,
-                                                          ),
-                                                        ),
-                                                        child: const Text(
-                                                          '简信红包',
-                                                          style: TextStyle(fontSize: 11, color: Colors.white),
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
+                child: Container(
+                  width: 240,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFE94848).withOpacity(0.12),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        height: 70,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Color(0xFFFF7A38), Color(0xFFE94848)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                        ),
+                        child: Stack(
+                          children: [
+                            Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '$gold-$totalNums-[$boom]',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  bottomText,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.white.withOpacity(0.9),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Positioned(
+                              right: 0, top: 0, bottom: 0,
+                              child: Center(
+                                child: _RedPacketIcon(
+                                  width: 34,
+                                  height: 40,
+                                  isInactive: inactive,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        height: 24,
+                        alignment: Alignment.centerLeft,
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Color(0xFFFF7A38), Color(0xFFE94848)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                        ),
+                        child: const Text(
+                          '简信红包',
+                          style: TextStyle(fontSize: 11, color: Colors.white),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ],
@@ -801,7 +801,6 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     );
   }
 
-  // ★★★ 封盘提示卡片（红包样式，但不显示自绘小红包，底部改为"简信管家提示！"）
   Widget _buildNoticeBubble(Map<String, dynamic> c, bool isSelf) {
     final nickname = c['nickname']?.toString() ?? '';
     final avatar = c['avatar']?.toString() ?? '';
@@ -823,13 +822,13 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
                     const TextStyle(fontSize: 11, color: Color(0xFF888888))),
             const SizedBox(height: 4),
             Container(
-              width: 215, // ★ 和普通红包卡保持一致
+              width: 215,
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(8),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF6A55C9).withOpacity(0.08), // 或用 Colors.black.withOpacity(0.05)
+                    color: const Color(0xFF6A55C9).withOpacity(0.08),
                     blurRadius: 6,
                     offset: const Offset(0, 2),
                   ),
@@ -839,15 +838,14 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // 红色封面（不放小红包图标，文字居中，高度自适应）
                   Container(
                     constraints: const BoxConstraints(minHeight: 70),
                     padding: const EdgeInsets.symmetric(
                         horizontal: 14, vertical: 14),
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xFFDBEAFE), Color(0xFFDCFCE7)], // ★ 浅蓝 → 浅绿
-                        begin: Alignment.centerLeft,                     // ★ 水平方向
+                        colors: [Color(0xFFDBEAFE), Color(0xFFDCFCE7)],
+                        begin: Alignment.centerLeft,
                         end: Alignment.centerRight,
                       ),
                     ),
@@ -858,20 +856,19 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
                       style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF1B5E20),                        // ★ 深绿字，浅底上看更清楚
+                        color: Color(0xFF1B5E20),
                         height: 1.5,
                       ),
                     ),
                   ),
-                  // 底部条：改为"简信管家提示！"
                   Container(
                     height: 24,
                     alignment: Alignment.centerLeft,
                     padding: const EdgeInsets.symmetric(horizontal: 10),
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xFFDBEAFE), Color(0xFFDCFCE7)], // ★ 同色系，和封面一致
-                        begin: Alignment.centerLeft,                     // ★ 水平方向
+                        colors: [Color(0xFFDBEAFE), Color(0xFFDCFCE7)],
+                        begin: Alignment.centerLeft,
                         end: Alignment.centerRight,
                       ),
                     ),
@@ -879,7 +876,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
                       '简信管家提示！',
                       style: TextStyle(
                         fontSize: 11,
-                        color: Color(0xFF1B5E20),                        // ★ 深绿字
+                        color: Color(0xFF1B5E20),
                         fontWeight: FontWeight.w500,
                       ),
                     ),
@@ -955,7 +952,6 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     final nickname = c['nickname']?.toString() ?? '';
     final content = c['content']?.toString() ?? '';
 
-    // ★★★ 识别本地资源（约定：以 asset:// 开头）★★★
     final isAsset = content.startsWith('asset://');
     final assetPath = isAsset ? content.substring(8) : '';
 
@@ -984,9 +980,21 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
                           child: const Icon(Icons.broken_image),
                         ),
                       )
-                    : Image.network(
-                        content,
+                    : Image(
+                        image: CachedNetworkImageProvider(
+                          content,
+                          cacheManager: AppCacheManager.instance,
+                        ),
                         fit: BoxFit.cover,
+                        frameBuilder: (_, child, __, ___) => child,
+                        loadingBuilder: (_, child, progress) {
+                          if (progress == null) return child;
+                          return Container(
+                            width: 100, height: 100, color: Colors.black12,
+                            alignment: Alignment.center,
+                            child: const CircularProgressIndicator(strokeWidth: 2),
+                          );
+                        },
                         errorBuilder: (_, __, ___) => Container(
                           width: 100, height: 100, color: Colors.black12,
                           alignment: Alignment.center,
@@ -1058,37 +1066,45 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     );
   }
 
-      Widget _avatar(String url, {double size = 38}) {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: Container(
-            width: size, height: size,
-            color: const Color(0xFFE6F2FF),
-            child: url.isEmpty
-                ? const Icon(Icons.person, color: Color(0xFF007AFF), size: 20)
-                : Image.network(
-                    url,
-                    width: size, height: size, fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) =>
-                        const Icon(Icons.person, color: Color(0xFF007AFF), size: 20),
-                  ),
-          ),
-        );
-      }
+  Widget _avatar(String url, {double size = 38}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        width: size, height: size,
+        color: const Color(0xFFE6F2FF),
+        child: url.isEmpty
+            ? const Icon(Icons.person, color: Color(0xFF007AFF), size: 20)
+            : Image(
+                image: CachedNetworkImageProvider(
+                  url,
+                  cacheManager: AppCacheManager.instance,
+                ),
+                width: size, height: size, fit: BoxFit.cover,
+                gaplessPlayback: true, // ★★★ 新增 ★★★
+                frameBuilder: (_, child, __, ___) => child,
+                loadingBuilder: (_, child, progress) {
+                  if (progress == null) return child;
+                  return const Icon(Icons.person, color: Color(0xFF007AFF), size: 20);
+                },
+                errorBuilder: (_, __, ___) =>
+                    const Icon(Icons.person, color: Color(0xFF007AFF), size: 20),
+              ),
+      ),
+    );
+  }
 
   Future<void> _onRedPacketTap(Map<String, dynamic> c) async {
-      _inputFocus.unfocus();
-      final setid = c['setid']?.toString() ?? '';
-      if (setid.isEmpty) return;
+    _inputFocus.unfocus();
+    final setid = c['setid']?.toString() ?? '';
+    if (setid.isEmpty) return;
 
-      final isget = int.tryParse(c['isget']?.toString() ?? '0') ?? 0;
-      final nums = int.tryParse(c['nums']?.toString() ?? '0') ?? 0;
+    final isget = int.tryParse(c['isget']?.toString() ?? '0') ?? 0;
+    final nums = int.tryParse(c['nums']?.toString() ?? '0') ?? 0;
 
-      // ★ 已领取 或 已抢完 → 直接进入详情页（不再走抢红包流程）
-      if (isget == 1 || nums <= 0) {
-        await _showRedDetail(setid);
-        return;
-      }
+    if (isget == 1 || nums <= 0) {
+      await _showRedDetail(setid);
+      return;
+    }
 
     try {
       final res = await HttpClient.instance.dio.post(
@@ -1211,51 +1227,71 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     }
   }
 
-  Future<void> _showRedDetail(String setid) async {
-    try {
-      final res = await HttpClient.instance.dio.post(
-        '${ApiConfig.redpackets}&roomid=${widget.roomid}',
-        data: {'op': 'getreddetail', 'setid': setid},
-        options: Options(
-          contentType: Headers.formUrlEncodedContentType,
-          responseType: ResponseType.plain,
-        ),
-      );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
+    Future<void> _showRedDetail(String setid) async {
+      try {
+        final res = await HttpClient.instance.dio.post(
+          '${ApiConfig.redpackets}&roomid=${widget.roomid}',
+          data: {'op': 'getreddetail', 'setid': setid},
+          options: Options(
+            contentType: Headers.formUrlEncodedContentType,
+            responseType: ResponseType.plain,
+          ),
+        );
+        dynamic data = res.data;
+        if (data is String) {
+          try { data = jsonDecode(data); } catch (_) {}
+        }
+        if (data is! Map || data['status']?.toString() != '1' || data['result'] is! Map) {
+          _toast(data is Map ? (data['result']?.toString() ?? '加载失败') : '加载失败');
+          return;
+        }
+        final r = Map<String, dynamic>.from(data['result']);
+        if (!mounted) return;
+
+        // ★★★ 新增：处理免死机器人金额打码（隐藏最后一位） ★★★
+        if (r['list'] is List) {
+          final List<dynamic> logList = r['list'];
+          for (var log in logList) {
+            if (log is Map) {
+              final nickname = log['nickname']?.toString() ?? '';
+              // 判断是否是免死机器人（兼容“免死”两个字或者带有“免死”前缀）
+              if (nickname == '免死' || nickname.startsWith('免死')) {
+                final String moneyStr = log['money']?.toString() ?? '';
+                if (moneyStr.isNotEmpty) {
+                  // 把最后一位字符替换成 *
+                  log['money'] = moneyStr.substring(0, moneyStr.length - 1) + '*';
+                }
+              }
+            }
+          }
+        }
+        // ★★★ 处理结束 ★★★
+
+        await showGeneralDialog(
+          context: context,
+          barrierDismissible: false,
+          barrierColor: Colors.transparent,
+          transitionDuration: const Duration(milliseconds: 280),
+          pageBuilder: (_, __, ___) => RedPacketDetailPanel(
+            data: r,
+            onOpenReport: () {
+              Navigator.of(context).pop();
+              _showRedReport();
+            },
+          ),
+          transitionBuilder: (_, anim, __, child) => SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 1),
+              end: Offset.zero,
+            ).animate(CurvedAnimation(parent: anim, curve: Curves.easeOutCubic)),
+            child: child,
+          ),
+        );
+      } catch (e) {
+        debugPrint('❌ [getreddetail] $e');
+        _toast('网络错误');
       }
-      if (data is! Map || data['status']?.toString() != '1' || data['result'] is! Map) {
-        _toast(data is Map ? (data['result']?.toString() ?? '加载失败') : '加载失败');
-        return;
-      }
-      final r = Map<String, dynamic>.from(data['result']);
-      if (!mounted) return;
-      await showGeneralDialog(
-        context: context,
-        barrierDismissible: false,
-        barrierColor: Colors.transparent,
-        transitionDuration: const Duration(milliseconds: 280),
-        pageBuilder: (_, __, ___) => RedPacketDetailPanel(
-          data: r,
-          onOpenReport: () {
-            Navigator.of(context).pop();
-            _showRedReport();
-          },
-        ),
-        transitionBuilder: (_, anim, __, child) => SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(0, 1),
-            end: Offset.zero,
-          ).animate(CurvedAnimation(parent: anim, curve: Curves.easeOutCubic)),
-          child: child,
-        ),
-      );
-    } catch (e) {
-      debugPrint('❌ [getreddetail] $e');
-      _toast('网络错误');
     }
-  }
 
   Future<void> _showRedReport() async {
     try {
@@ -1275,29 +1311,28 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
         _toast('加载失败');
         return;
       }
-      final r = Map<String, dynamic>.from(data['result']);
-      if (!mounted) return;
-      await showGeneralDialog(
-        context: context,
-        barrierDismissible: false,
-        barrierColor: Colors.transparent,
-        transitionDuration: const Duration(milliseconds: 280),
-        pageBuilder: (_, __, ___) => RedReportPanel(data: r),
-        transitionBuilder: (_, anim, __, child) => SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(0, 1),
-            end: Offset.zero,
-          ).animate(CurvedAnimation(parent: anim, curve: Curves.easeOutCubic)),
-          child: child,
-        ),
-      );
+            final r = Map<String, dynamic>.from(data['result']);
+            if (!mounted) return;
+
+            // ★ 改为 CupertinoPageRoute 以支持 iOS 侧滑返回
+            await Navigator.push(
+              context,
+              CupertinoPageRoute(
+                builder: (_) => RedPacketDetailPanel(
+                  data: r,
+                  onOpenReport: () {
+                    Navigator.of(context).pop(); // 先关闭详情页
+                    _showRedReport();            // 再打开举报页
+                  },
+                ),
+              ),
+            );
     } catch (e) {
       debugPrint('❌ [getrecord] $e');
       _toast('网络错误');
     }
   }
 
-  // ---- 输入栏 ----
   Widget _buildInputBar() {
     return Container(
       height: 52,
@@ -1392,7 +1427,6 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
           customIcon: const _SendRedIcon()),
       _FuncItem('看余额', Icons.account_balance_wallet, const Color(0xFF5AC8FA), _onCheckBalance),
       _FuncItem('账单', Icons.receipt_long, const Color(0xFF5AC8FA), _onBill),
-      // _FuncItem('充值', Icons.add_circle, const Color(0xFF5AC8FA), _onRecharge),
       _FuncItem('幸运抽奖', null, const Color(0xFF5AC8FA), _onLottery,
           customIcon: const _LotteryWheelIcon()),
       _FuncItem('抢包奖励', Icons.emoji_events, const Color(0xFF5AC8FA), _onReward),
@@ -1485,23 +1519,16 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
   void _onBill() {
     setState(() => _showMorePanel = false);
     Navigator.of(context).push(
-      MaterialPageRoute(
+      CupertinoPageRoute(
         builder: (_) => RedlogPage(roomid: widget.roomid),
       ),
-    );
-  }
-
-  void _onRecharge() {
-    setState(() => _showMorePanel = false);
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const RechargePage()),
     );
   }
 
   void _onLottery() {
     setState(() => _showMorePanel = false);
     Navigator.of(context).push(
-      MaterialPageRoute(
+      CupertinoPageRoute(
         builder: (_) => LunpanPage(roomid: widget.roomid),
       ),
     );
@@ -1537,7 +1564,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
         return;
       }
       Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ChatRoomPage(fuid: fuid)),
+        CupertinoPageRoute(builder: (_) => ChatRoomPage(fuid: fuid)),
       );
     } else {
       _toast('请前往通讯录查找财务人员');
@@ -1551,7 +1578,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
       return;
     }
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ChatRoomPage(fuid: _ownerUid)),
+      CupertinoPageRoute(builder: (_) => ChatRoomPage(fuid: _ownerUid)),
     );
   }
 
@@ -1633,13 +1660,12 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
 class _FuncItem {
   final String label;
   final IconData? icon;
-  final Widget? customIcon;   // ★ 新增：优先使用自绘图标
+  final Widget? customIcon;
   final Color color;
   final VoidCallback onTap;
   _FuncItem(this.label, this.icon, this.color, this.onTap, {this.customIcon});
 }
 
-// ================= 简易跑马灯 =================
 class _MarqueeText extends StatefulWidget {
   final String text;
   final TextStyle style;
@@ -1691,11 +1717,10 @@ class _MarqueeTextState extends State<_MarqueeText> {
   }
 }
 
-// ================= 自绘红包图标（“抢”字款） =================
 class _RedPacketIcon extends StatelessWidget {
   final double width;
   final double height;
-  final bool isInactive; // ★ 新增：熄灭状态
+  final bool isInactive;
   const _RedPacketIcon({
     this.width = 34,
     this.height = 40,
@@ -1715,7 +1740,7 @@ class _RedPacketIcon extends StatelessWidget {
 }
 
 class _RedPacketIconPainter extends CustomPainter {
-  final bool isInactive; // ★ 新增
+  final bool isInactive;
   const _RedPacketIconPainter({this.isInactive = false});
 
   @override
@@ -1723,10 +1748,8 @@ class _RedPacketIconPainter extends CustomPainter {
     final w = size.width;
     final h = size.height;
     final rect = Offset.zero & size;
-    final rrect =
-        RRect.fromRectAndRadius(rect, Radius.circular(w * 0.18));
+    final rrect = RRect.fromRectAndRadius(rect, Radius.circular(w * 0.18));
 
-    // 1. 红包主体
     canvas.drawRRect(
       rrect,
       Paint()
@@ -1740,7 +1763,6 @@ class _RedPacketIconPainter extends CustomPainter {
     canvas.save();
     canvas.clipRRect(rrect);
 
-    // 2. 顶部翻盖
     final flapBottom = h * 0.42;
     final flapPath = Path()
       ..moveTo(0, 0)
@@ -1759,7 +1781,6 @@ class _RedPacketIconPainter extends CustomPainter {
         ).createShader(Rect.fromLTWH(0, 0, w, flapBottom)),
     );
 
-    // 翻盖下沿高光
     final edgePath = Path()
       ..moveTo(0, flapBottom)
       ..quadraticBezierTo(w / 2, flapBottom + w * 0.22, w, flapBottom);
@@ -1773,19 +1794,15 @@ class _RedPacketIconPainter extends CustomPainter {
 
     canvas.restore();
 
-    // 3. 中心金色印章
     final center = Offset(w / 2, h * 0.52);
-    // ★ 熄灭时圈变小一点
     final sealR = isInactive ? w * 0.18 : w * 0.28;
 
-    // 阴影
     canvas.drawCircle(
       center + Offset(0, h * 0.025),
       sealR,
       Paint()..color = Colors.black.withOpacity(0.18),
     );
 
-    // 金色底
     canvas.drawCircle(
       center,
       sealR,
@@ -1796,7 +1813,6 @@ class _RedPacketIconPainter extends CustomPainter {
         ).createShader(Rect.fromCircle(center: center, radius: sealR)),
     );
 
-    // 印章描边
     canvas.drawCircle(
       center,
       sealR,
@@ -1806,29 +1822,28 @@ class _RedPacketIconPainter extends CustomPainter {
         ..strokeWidth = 0.8,
     );
 
-            // 4. 中间"抢"字（★ 熄灭时不绘制）
-            if (!isInactive) {
-              final tp = TextPainter(
-                text: TextSpan(
-                  text: '抢',
-                  style: TextStyle(
-                    color: const Color(0xFFB81F1F),
-                    fontSize: sealR * 1.25,
-                    fontWeight: FontWeight.w900,
-                    height: 1.0,
-                  ),
-                ),
-                textDirection: TextDirection.ltr,
-              )..layout();
-              tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
-            }
+    if (!isInactive) {
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '抢',
+          style: TextStyle(
+            color: const Color(0xFFB81F1F),
+            fontSize: sealR * 1.25,
+            fontWeight: FontWeight.w900,
+            height: 1.0,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+    }
   }
 
   @override
   bool shouldRepaint(covariant _RedPacketIconPainter oldDelegate) =>
-      oldDelegate.isInactive != isInactive; // ★ 状态变了才重绘
+      oldDelegate.isInactive != isInactive;
 }
-// ================= 发红包图标（淡红色小信封） =================
+
 class _SendRedIcon extends StatelessWidget {
   const _SendRedIcon();
   @override
@@ -1847,7 +1862,7 @@ class _SendRedIconPainter extends CustomPainter {
     final w = size.width;
     final h = size.height;
 
-    const mainColor = Color(0xFF5AC8FA);   // ★ 统一色
+    const mainColor = Color(0xFF5AC8FA);
     final strokeW = w * 0.07;
 
     final rrect = RRect.fromRectAndRadius(
@@ -1855,10 +1870,8 @@ class _SendRedIconPainter extends CustomPainter {
       Radius.circular(w * 0.22),
     );
 
-    // 底：浅蓝
     canvas.drawRRect(rrect, Paint()..color = mainColor);
 
-    // 描边：白
     canvas.drawRRect(
       rrect,
       Paint()
@@ -1867,7 +1880,6 @@ class _SendRedIconPainter extends CustomPainter {
         ..strokeWidth = strokeW,
     );
 
-    // 翻盖弧线：白
     canvas.save();
     canvas.clipRRect(rrect);
     final flapY = h * 0.28;
@@ -1884,7 +1896,6 @@ class _SendRedIconPainter extends CustomPainter {
     );
     canvas.restore();
 
-    // 中心圆环：白
     final center = Offset(w / 2, h * 0.40);
     final circleR = w * 0.13;
     canvas.drawCircle(center, circleR + strokeW * 0.6, Paint()..color = mainColor);
@@ -1902,7 +1913,6 @@ class _SendRedIconPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-// ================= 幸运抽奖图标（转轮） =================
 class _LotteryWheelIcon extends StatelessWidget {
   const _LotteryWheelIcon();
   @override
@@ -1924,7 +1934,6 @@ class _LotteryWheelPainter extends CustomPainter {
     final outerR = w * 0.48;
     final innerR = w * 0.36;
 
-    // 外环：浅蓝径向渐变（浅 → 深）
     canvas.drawCircle(
       center,
       outerR,
@@ -1935,7 +1944,6 @@ class _LotteryWheelPainter extends CustomPainter {
         ).createShader(Rect.fromCircle(center: center, radius: outerR)),
     );
 
-    // 内部扇区：白色
     const sections = 12;
     final sweep = 2 * math.pi / sections;
     for (int i = 0; i < sections; i++) {
@@ -1952,7 +1960,6 @@ class _LotteryWheelPainter extends CustomPainter {
       canvas.drawPath(path, Paint()..color = Colors.white);
     }
 
-    // 扇区分割线
     final linePaint = Paint()
       ..color = const Color(0xFF5AC8FA)
       ..strokeWidth = 0.7;
@@ -1968,7 +1975,6 @@ class _LotteryWheelPainter extends CustomPainter {
       );
     }
 
-    // 内圈白描边
     canvas.drawCircle(
       center,
       innerR,
@@ -1978,7 +1984,6 @@ class _LotteryWheelPainter extends CustomPainter {
         ..strokeWidth = 1.0,
     );
 
-    // 中心轴
     canvas.drawCircle(center, w * 0.075, Paint()..color = Colors.white);
     canvas.drawCircle(
       center,
@@ -1990,7 +1995,6 @@ class _LotteryWheelPainter extends CustomPainter {
     );
     canvas.drawCircle(center, w * 0.032, Paint()..color = const Color(0xFF5AC8FA));
 
-    // 指针
     final pointerPath = Path()
       ..moveTo(center.dx, center.dy - innerR + 3.5)
       ..lineTo(center.dx - 3.2, center.dy - outerR + 0.5)
@@ -2001,127 +2005,4 @@ class _LotteryWheelPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-// =============// ================= 红包卡形状裁剪（如意角） =================
-                class _RedPacketCardClipper extends CustomClipper<Path> {
-                  @override
-                  Path getClip(Size size) {
-                    final w = size.width;
-                    final h = size.height;
-
-                    // ★ 如意角参数（想调就改这两处）
-                    const r = 14.0;         // 角区域整体尺寸
-                    const inner = 6.0;      // 内凹/外凸的"交叉点"位置
-                    const inner2 = 4.0;     // 贝塞尔控制点辅助位置
-
-                    final path = Path();
-
-                    // ============ 左上角 ============
-                    path.moveTo(r, 0);
-                    // 内凹：顶边 → 卡片内部
-                    path.cubicTo(
-                      r * 0.6, 0,
-                      inner2, inner2,
-                      inner, inner,
-                    );
-                    // 外凸：交叉点 → 左边缘
-                    path.cubicTo(
-                      inner + 2, inner + 2,
-                      0, r * 0.6,
-                      0, r,
-                    );
-
-                    // ============ 左边缘向下 ============
-                    path.lineTo(0, h - r);
-
-                    // ============ 左下角 ============
-                    path.cubicTo(
-                      0, h - r * 0.6,
-                      inner2, h - inner2,
-                      inner, h - inner,
-                    );
-                    path.cubicTo(
-                      inner + 2, h - inner - 2,
-                      r * 0.6, h,
-                      r, h,
-                    );
-
-                    // ============ 底边向右 ============
-                    path.lineTo(w - r, h);
-
-                    // ============ 右下角 ============
-                    path.cubicTo(
-                      w - r * 0.6, h,
-                      w - inner2, h - inner2,
-                      w - inner, h - inner,
-                    );
-                    path.cubicTo(
-                      w - inner - 2, h - inner - 2,
-                      w, h - r * 0.6,
-                      w, h - r,
-                    );
-
-                    // ============ 右边缘向上 ============
-                    path.lineTo(w, r);
-
-                    // ============ 右上角 ============
-                    path.cubicTo(
-                      w, r * 0.6,
-                      w - inner2, inner2,
-                      w - inner, inner,
-                    );
-                    path.cubicTo(
-                      w - inner - 2, inner + 2,
-                      w - r * 0.6, 0,
-                      w - r, 0,
-                    );
-
-                    path.close();
-                    return path;
-                  }
-
-                  @override
-                  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
-                }
-
-// ================= 红包卡装饰：密集祥云纹 + 金色双线 =================
-class _RedPacketDecorPainter extends CustomPainter {
-  final Path cardPath;
-  _RedPacketDecorPainter(this.cardPath);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    // 金色双线描边
-    canvas.drawPath(
-      cardPath,
-      Paint()
-        ..color = const Color(0xFFFFC93C)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.6,
-    );
-    final innerPath = _scalePath(cardPath, size, 0.94);
-    canvas.drawPath(
-      innerPath,
-      Paint()
-        ..color = const Color(0xFFFFE082).withOpacity(0.85)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 0.8,
-    );
-  }
-
-  /// 把形状按比例缩小（用于金色内描边）★ 补回这个方法
-  Path _scalePath(Path src, Size size, double scale) {
-    final cx = size.width / 2;
-    final cy = size.height / 2;
-    final matrix = Matrix4.identity()
-      ..translate(cx, cy)
-      ..scale(scale)
-      ..translate(-cx, -cy);
-    return src.transform(matrix.storage);
-  }
-
-  @override
-  bool shouldRepaint(covariant _RedPacketDecorPainter oldDelegate) =>
-      oldDelegate.cardPath != cardPath;
 }

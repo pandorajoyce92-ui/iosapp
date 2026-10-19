@@ -3,6 +3,10 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../core/app_cache_manager.dart'; // ★ 引入全局缓存
+import 'package:flutter/cupertino.dart'; // 使用 Cupertino 动画
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 import 'chat_room_page.dart';
 import 'create_group_page.dart';
@@ -42,6 +46,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   bool _showPlusMenu = false;
   int _prevUnreadTotal = -1;
   String _notice = '';
+  IO.Socket? _socket;
 
   /// 蓝绿渐变背景
   static const LinearGradient _bgGradient = LinearGradient(
@@ -58,24 +63,49 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   /// 列表项半透明白（让渐变透出来，同时能遮挡左滑红块）
   static const Color _itemBg = Color(0x26FFFFFF); // 95% 白，红块基本不透
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) FocusScope.of(context).unfocus();
-    });
+    @override
+    void initState() {
+      super.initState();
+      WidgetsBinding.instance.addObserver(this);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) FocusScope.of(context).unfocus();
+      });
 
-    _loadAll();
+      // ★★★ 1. 优先读取本地缓存，瞬间渲染出列表（0延迟） ★★★
+      _loadCacheFirst();
 
-    _friendTimer = Timer.periodic(const Duration(seconds: 5), (_) => _loadFriends());
-    _roomTimer = Timer.periodic(const Duration(seconds: 15), (_) => _loadRoomMessages());
-    _applyTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      _loadGroupApplies();
-      _loadShareholderApplies();
-      _loadRooms();
-    });
-  }
+      // 2. 随后静默拉取最新数据（不阻塞页面显示）
+      _loadAll();
+      _connectSocket(); // ★★★ 新增这一行，启动大厅 Socket 监听 ★★★
+
+      _friendTimer = Timer.periodic(const Duration(seconds: 5), (_) => _loadFriends());
+      _roomTimer = Timer.periodic(const Duration(seconds: 15), (_) => _loadRoomMessages());
+      _applyTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+        _loadGroupApplies();
+        _loadShareholderApplies();
+        _loadRooms(); // ★★★ 补上这一行 ★★★
+      });
+    }
+
+    // ★ 新增一个方法，专门用于同步读缓存
+    void _loadCacheFirst() {
+      final cachedRooms = DataCache.get('game_rooms');
+      if (cachedRooms is List) {
+        try {
+          setState(() {
+            _rooms = cachedRooms.map((e) => Room.fromJson(Map<String, dynamic>.from(e))).toList();
+          });
+        } catch (_) {}
+      }
+      final cachedFriends = DataCache.get('game_friends');
+      if (cachedFriends is List) {
+        try {
+          setState(() {
+            _friends = cachedFriends.map((e) => Friend.fromJson(Map<String, dynamic>.from(e))).toList();
+          });
+        } catch (_) {}
+      }
+    }
 
   @override
   void dispose() {
@@ -83,6 +113,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     _friendTimer?.cancel();
     _roomTimer?.cancel();
     _applyTimer?.cancel();
+    _socket?.dispose(); // ★★★ 新增这一行 ★★★
     super.dispose();
   }
 
@@ -93,6 +124,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
       _loadRoomMessages();
       _loadGroupApplies();
       _loadShareholderApplies();
+      _loadRooms(); // ★★★ 补上这一行，切回前台立刻刷新房间！
     }
   }
 
@@ -148,6 +180,51 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
             .toList();
         if (mounted) setState(() => _rooms = list);
         await DataCache.set('game_rooms', data['result']);   // ★ 写缓存
+      }
+    }
+
+    void _connectSocket() {
+      try {
+        _socket = IO.io(
+          'https://jianxinchat.top',
+          <String, dynamic>{
+            'transports': ['websocket', 'polling'],
+            'autoConnect': true,
+            'reconnection': true,
+            'reconnectionAttempts': 9999,
+            'reconnectionDelay': 2000,
+            'forceNew': true,
+          },
+        );
+
+        _socket!.onConnect((_) {
+          debugPrint('✅ 大厅 Socket 已连接');
+        });
+
+        // 监听后端发来的 personal 消息
+        _socket!.on('new_msg', (data) {
+          try {
+            dynamic msg = data;
+            if (msg is String) {
+              msg = msg.replaceAll('&quot;', '"');
+              try { msg = jsonDecode(msg); } catch (_) {}
+            }
+
+            if (msg is Map && msg['type'] == 'apply_approved') {
+              // 收到审批通过通知，瞬间刷新房间列表
+              _loadRooms();
+              _toast('您已加入新的群聊！');
+            }
+          } catch (e) {
+            debugPrint('❌ 解析 Socket 消息失败: $e');
+          }
+        });
+
+        _socket!.onDisconnect((_) => debugPrint('⚠️ 大厅 Socket 已断开'));
+        _socket!.onConnectError((e) => debugPrint('❌ 大厅 Socket 连接错误: $e'));
+        _socket!.connect();
+      } catch (e) {
+        debugPrint('❌ [socket init] $e');
       }
     }
 
@@ -316,27 +393,27 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     );
   }
 
-  void _goToRoom(Room room) {
-    if (room.type == 3) {
-      Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => LiuhecaiRoomPage(roomid: room.id, roomName: room.roomname),
-      ));
-    } else {
-      Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => RedPacketRoomPage(roomid: room.id, roomName: room.roomname),
-      ));
+    void _goToRoom(Room room) {
+      if (room.type == 3) {
+        Navigator.of(context).push(CupertinoPageRoute( // ★ 改这里
+          builder: (_) => LiuhecaiRoomPage(roomid: room.id, roomName: room.roomname),
+        ));
+      } else {
+        Navigator.of(context).push(CupertinoPageRoute( // ★ 改这里
+          builder: (_) => RedPacketRoomPage(roomid: room.id, roomName: room.roomname),
+        ));
+      }
     }
-  }
 
-  Future<void> _goToFriend(Friend friend) async {
-    if (mounted) setState(() => _friends.removeWhere((f) => f.fuid == friend.fuid));
-    _post(ApiConfig.chatRoom, {'op': 'clear_unread', 'fuid': friend.fuid});
-    if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ChatRoomPage(fuid: friend.fuid)),
-    );
-    if (mounted) _loadFriends();
-  }
+    Future<void> _goToFriend(Friend friend) async {
+      if (mounted) setState(() => _friends.removeWhere((f) => f.fuid == friend.fuid));
+      _post(ApiConfig.chatRoom, {'op': 'clear_unread', 'fuid': friend.fuid});
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        CupertinoPageRoute(builder: (_) => ChatRoomPage(fuid: friend.fuid)), // ★ 改这里
+      );
+      if (mounted) _loadFriends();
+    }
 
   String _formatTime(int timestamp) {
     if (timestamp <= 0) return '';
@@ -473,7 +550,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     return GestureDetector(
       onTap: () {
         Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const GonggaoPage()),
+          CupertinoPageRoute(builder: (_) => const GonggaoPage()), // ★ 改这里
         );
       },
       child: Container(
@@ -556,14 +633,26 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
               padding: const EdgeInsets.only(bottom: 6),
               child: Row(
                 children: [
-                  ClipOval(
-                    child: apply.avatarUrl.isEmpty
-                        ? Container(width: 30, height: 30, color: const Color(0xFFF0ECFF),
-                            alignment: Alignment.center,
-                            child: const Icon(Icons.person, size: 18, color: AppColors.purple))
-                        : Image.network(apply.avatarUrl, width: 30, height: 30, fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(width: 30, height: 30, color: const Color(0xFFF0ECFF))),
-                  ),
+                                    ClipOval(
+                                      child: apply.avatarUrl.isEmpty
+                                          ? Container(width: 30, height: 30, color: const Color(0xFFF0ECFF),
+                                              alignment: Alignment.center,
+                                              child: const Icon(Icons.person, size: 18, color: AppColors.purple))
+                                          : Image(
+                                              image: CachedNetworkImageProvider(
+                                                apply.avatarUrl,
+                                                cacheManager: AppCacheManager.instance,
+                                              ),
+                                              width: 30, height: 30, fit: BoxFit.cover,
+                                              gaplessPlayback: true, // ★★★ 新增：开启无间隙播放，防止闪烁 ★★★
+                                              frameBuilder: (_, child, __, ___) => child, // ★ 防闪
+                                              loadingBuilder: (_, child, progress) {
+                                                if (progress == null) return child;
+                                                return Container(width: 30, height: 30, color: const Color(0xFFF0ECFF));
+                                              },
+                                              errorBuilder: (_, __, ___) => Container(width: 30, height: 30, color: const Color(0xFFF0ECFF)),
+                                            ),
+                                    ),
                   const SizedBox(width: 8),
                   Expanded(child: Text(apply.nickname, style: const TextStyle(fontSize: 13))),
                   _buildSmallBtn('同意', const Color(0xFF28A745),
@@ -586,14 +675,26 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
         padding: const EdgeInsets.only(bottom: 8),
         child: Row(
           children: [
-            ClipOval(
-              child: apply.avatarUrl.isEmpty
-                  ? Container(width: 30, height: 30, color: const Color(0xFFF0ECFF),
-                      alignment: Alignment.center,
-                      child: const Icon(Icons.person, size: 18, color: AppColors.purple))
-                  : Image.network(apply.avatarUrl, width: 30, height: 30, fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(width: 30, height: 30, color: const Color(0xFFF0ECFF))),
-            ),
+                        ClipOval(
+                          child: apply.avatarUrl.isEmpty
+                              ? Container(width: 30, height: 30, color: const Color(0xFFF0ECFF),
+                                  alignment: Alignment.center,
+                                  child: const Icon(Icons.person, size: 18, color: AppColors.purple))
+                              : Image(
+                                  image: CachedNetworkImageProvider(
+                                    apply.avatarUrl,
+                                    cacheManager: AppCacheManager.instance,
+                                  ),
+                                  width: 30, height: 30, fit: BoxFit.cover,
+                                  gaplessPlayback: true, // ★★★ 新增：开启无间隙播放，防止闪烁 ★★★
+                                  frameBuilder: (_, child, __, ___) => child,
+                                  loadingBuilder: (_, child, progress) {
+                                    if (progress == null) return child;
+                                    return Container(width: 30, height: 30, color: const Color(0xFFF0ECFF));
+                                  },
+                                  errorBuilder: (_, __, ___) => Container(width: 30, height: 30, color: const Color(0xFFF0ECFF)),
+                                ),
+                        ),
             const SizedBox(width: 8),
             Expanded(
               child: Column(
@@ -640,18 +741,25 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-                                                ClipRRect(
-                                                  borderRadius: BorderRadius.circular(10),
-                                                  child: room.avatarUrl.isEmpty
-                                                      ? _defaultAvatar(Icons.group)
-                                                      : Image.network(
-                                                          room.avatarUrl,
-                                                          width: 48,
-                                                          height: 48,
-                                                          fit: BoxFit.cover,
-                                                          errorBuilder: (_, __, ___) => _defaultAvatar(Icons.group),
-                                                        ),
-                                                ),
+                                                            ClipRRect(
+                                                              borderRadius: BorderRadius.circular(10),
+                                                              child: room.avatarUrl.isEmpty
+                                                                  ? _defaultAvatar(Icons.group)
+                                                                  : Image(
+                                                                      image: CachedNetworkImageProvider(
+                                                                        room.avatarUrl,
+                                                                        cacheManager: AppCacheManager.instance,
+                                                                      ),
+                                                                      width: 48, height: 48, fit: BoxFit.cover,
+                                                                      gaplessPlayback: true, // ★★★ 新增：开启无间隙播放，防止闪烁 ★★★
+                                                                      frameBuilder: (_, child, __, ___) => child,
+                                                                      loadingBuilder: (_, child, progress) {
+                                                                        if (progress == null) return child;
+                                                                        return _defaultAvatar(Icons.group);
+                                                                      },
+                                                                      errorBuilder: (_, __, ___) => _defaultAvatar(Icons.group),
+                                                                    ),
+                                                            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -686,18 +794,25 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(10),
-                                      child: friend.avatarUrl.isEmpty
-                                          ? _defaultAvatar(Icons.person)
-                                          : Image.network(
-                                              friend.avatarUrl,
-                                              width: 48,
-                                              height: 48,
-                                              fit: BoxFit.cover,
-                                              errorBuilder: (_, __, ___) => _defaultAvatar(Icons.person),
-                                            ),
-                                    ),
+                                                ClipRRect(
+                                                  borderRadius: BorderRadius.circular(10),
+                                                  child: friend.avatarUrl.isEmpty
+                                                      ? _defaultAvatar(Icons.person)
+                                                      : Image(
+                                                          image: CachedNetworkImageProvider(
+                                                            friend.avatarUrl,
+                                                            cacheManager: AppCacheManager.instance,
+                                                          ),
+                                                          width: 48, height: 48, fit: BoxFit.cover,
+                                                          gaplessPlayback: true, // ★★★ 新增：开启无间隙播放，防止闪烁 ★★★
+                                                          frameBuilder: (_, child, __, ___) => child,
+                                                          loadingBuilder: (_, child, progress) {
+                                                            if (progress == null) return child;
+                                                            return _defaultAvatar(Icons.person);
+                                                          },
+                                                          errorBuilder: (_, __, ___) => _defaultAvatar(Icons.person),
+                                                        ),
+                                                ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -765,48 +880,48 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildPlusMenu() {
-    return Positioned(
-      top: 4, right: 10,
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.13), blurRadius: 24, offset: const Offset(0, 8)),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _menuItem('创建雷群', () async {
-                setState(() => _showPlusMenu = false);
-                final result = await Navigator.of(context).push<bool>(
-                  MaterialPageRoute(builder: (_) => const CreateGroupPage()),
-                );
-                if (result == true) {
-                  _loadRooms();
-                  _loadGroupApplies();
-                }
-              }),
-              _menuItem('创建六合彩群', () async {
-                setState(() => _showPlusMenu = false);
-                final result = await Navigator.of(context).push<bool>(
-                  MaterialPageRoute(builder: (_) => const LiuhecaiCreateGroupPage()),
-                );
-                if (result == true) {
-                  _loadRooms();
-                  _loadGroupApplies();
-                }
-              }, isLast: true),
-            ],
+    Widget _buildPlusMenu() {
+      return Positioned(
+        top: 4, right: 10,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withOpacity(0.13), blurRadius: 24, offset: const Offset(0, 8)),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _menuItem('创建雷群', () async {
+                  setState(() => _showPlusMenu = false);
+                  final result = await Navigator.of(context).push<bool>(
+                    CupertinoPageRoute(builder: (_) => const CreateGroupPage()), // ★ 改这里
+                  );
+                  if (result == true) {
+                    _loadRooms();
+                    _loadGroupApplies();
+                  }
+                }),
+                _menuItem('创建六合彩群', () async {
+                  setState(() => _showPlusMenu = false);
+                  final result = await Navigator.of(context).push<bool>(
+                    CupertinoPageRoute(builder: (_) => const LiuhecaiCreateGroupPage()), // ★ 改这里
+                  );
+                  if (result == true) {
+                    _loadRooms();
+                    _loadGroupApplies();
+                  }
+                }, isLast: true),
+              ],
+            ),
           ),
         ),
-      ),
-    );
-  }
+      );
+    }
 
   Widget _menuItem(String label, VoidCallback onTap, {bool isLast = false}) {
     return GestureDetector(

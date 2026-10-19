@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
-import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:flutter/cupertino.dart'; // ★ 完整引入，用于图标和热区
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cached_network_image/cached_network_image.dart'; // ★ 新增
+import '../core/app_cache_manager.dart'; // ★ 新增
 
 import '../core/config.dart';
 import '../core/http_client.dart';
@@ -16,7 +18,7 @@ class ShareholderApplyPage extends StatefulWidget {
 }
 
 class _ShareholderApplyPageState extends State<ShareholderApplyPage> {
-  bool _loading = true;
+  bool _loading = false; // ★ 初始不显示全屏 loading
 
   bool _isOwner = false;
   bool _isShareholder = false;
@@ -186,11 +188,10 @@ class _ShareholderApplyPageState extends State<ShareholderApplyPage> {
             children: [
               SizedBox(height: MediaQuery.of(context).padding.top),
               _buildTopBar(),
-              Expanded(
-                child: _loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : _buildBody(),
-              ),
+                            Expanded(
+                              // ★ 直接渲染，杜绝转圈
+                              child: _buildBody(),
+                            ),
             ],
           ),
         ),
@@ -204,19 +205,21 @@ class _ShareholderApplyPageState extends State<ShareholderApplyPage> {
       color: Colors.transparent,
       child: Stack(
         children: [
-          Positioned(
-            left: 8,
-            top: 0,
-            bottom: 0,
-            child: GestureDetector(
-              onTap: () => Navigator.of(context).pop(),
-              child: const SizedBox(
-                width: 40,
-                height: 44,
-                child: Icon(CupertinoIcons.back, color: Colors.black, size: 22),
-              ),
-            ),
-          ),
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: GestureDetector(
+                        onTap: () => Navigator.of(context).pop(),
+                        behavior: HitTestBehavior.opaque, // ★ 强制拦截
+                        child: Container(
+                          width: 50,
+                          height: 44,
+                          alignment: Alignment.center,
+                          child: const Icon(CupertinoIcons.back, color: Colors.black, size: 24),
+                        ),
+                      ),
+                    ),
           const Center(
             child: Text(
               '股东与代理',
@@ -377,16 +380,24 @@ class _ShareholderApplyPageState extends State<ShareholderApplyPage> {
               width: 44,
               height: 44,
               color: const Color(0xFFE6F2FF),
-              child: m.avatarUrl.isEmpty
-                  ? const Icon(Icons.person, color: Color(0xFF007AFF), size: 22)
-                  : Image.network(
-                      m.avatarUrl,
-                      width: 44,
-                      height: 44,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          const Icon(Icons.person, color: Color(0xFF007AFF), size: 22),
-                    ),
+                            child: m.avatarUrl.isEmpty
+                                ? const Icon(Icons.person, color: Color(0xFF007AFF), size: 22)
+                                : Image(
+                                    image: CachedNetworkImageProvider(
+                                      m.avatarUrl,
+                                      cacheManager: AppCacheManager.instance, // ★ 使用强缓存
+                                    ),
+                                    width: 44,
+                                    height: 44,
+                                    fit: BoxFit.cover,
+                                    frameBuilder: (_, child, __, ___) => child, // ★ 防闪烁
+                                    loadingBuilder: (_, child, progress) {
+                                      if (progress == null) return child;
+                                      return const Icon(Icons.person, color: Color(0xFF007AFF), size: 22);
+                                    },
+                                    errorBuilder: (_, __, ___) =>
+                                        const Icon(Icons.person, color: Color(0xFF007AFF), size: 22),
+                                  ),
             ),
           ),
           const SizedBox(width: 10),

@@ -26,6 +26,9 @@ class _RegisterPageState extends State<RegisterPage> {
   bool _showPwd2 = false;
   bool _submitting = false;
   bool _showDownloadSheet = false;
+  final _codeCtrl = TextEditingController();
+  String _captchaBase64 = '';
+  bool _loadingCaptcha = false;
 
   static const LinearGradient _bgGradient = LinearGradient(
     begin: Alignment.topCenter,
@@ -55,55 +58,86 @@ class _RegisterPageState extends State<RegisterPage> {
 
   bool _isMobile(String v) => RegExp(r'^1[3-9]\d{9}$').hasMatch(v);
 
-  Future<void> _doRegister() async {
-    if (_submitting) return;
-
-    final mobile     = _mobileCtrl.text.trim();
-    final password   = _pwdCtrl.text;
-    final password2  = _pwd2Ctrl.text;
-    final nickname   = _nicknameCtrl.text.trim();
-    final inviter    = _inviterCtrl.text.trim();
-
-    if (!_isMobile(mobile)) { _toast('请输入正确的手机号码'); return; }
-    if (password.length < 6) { _toast('密码不能少于6位'); return; }
-    if (password.length > 20) { _toast('密码不能超过20位'); return; }
-    if (password != password2) { _toast('两次密码不一致'); return; }
-    if (nickname.isEmpty) { _toast('请输入昵称'); return; }
-    if (inviter.isEmpty) { _toast('请输入推荐码'); return; }
-    if (!RegExp(r'^\d+$').hasMatch(inviter)) { _toast('推荐码格式不正确（应为数字）'); return; }
-
-    setState(() => _submitting = true);
-    try {
-      final res = await HttpClient.instance.dio.post(
-        ApiConfig.register,
-        data: {
-          'mobile': mobile,
-          'password': password,
-          'nickname': nickname,
-          'inviter_code': inviter,
-        },
-        options: Options(contentType: Headers.formUrlEncodedContentType),
-      );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
+    Future<void> _refreshCaptcha() async {
+      if (_loadingCaptcha) return;
+      setState(() => _loadingCaptcha = true);
+      try {
+        final res = await HttpClient.instance.dio.get(
+          '${ApiConfig.register}&op=get_captcha', // 注意这里用 get
+          options: Options(responseType: ResponseType.bytes), // 请求二进制图片数据
+        );
+        if (res.data != null) {
+          final bytes = res.data as List<int>;
+          setState(() {
+            _captchaBase64 = base64Encode(bytes);
+          });
+        }
+      } catch (e) {
+        debugPrint('❌ [captcha] $e');
+        _toast('获取验证码失败');
+      } finally {
+        if (mounted) setState(() => _loadingCaptcha = false);
       }
-
-      if (data is Map && data['status'] == 1) {
-        _toast('注册成功');
-        await Future.delayed(const Duration(milliseconds: 800));
-        if (!mounted) return;
-        Navigator.of(context).pop(mobile);
-      } else {
-        _toast(data is Map ? (data['result']?.toString() ?? '注册失败') : '注册失败');
-      }
-    } catch (e) {
-      debugPrint('❌ [register] $e');
-      _toast('网络错误，请稍后重试');
-    } finally {
-      if (mounted) setState(() => _submitting = false);
     }
-  }
+
+    Future<void> _doRegister() async {
+      if (_submitting) return;
+
+      final mobile     = _mobileCtrl.text.trim();
+      final password   = _pwdCtrl.text;
+      final password2  = _pwd2Ctrl.text;
+      final nickname   = _nicknameCtrl.text.trim();
+      final inviter    = _inviterCtrl.text.trim();
+      final code       = _codeCtrl.text.trim(); // ★ 1. 获取验证码输入框的值
+
+      if (!_isMobile(mobile)) { _toast('请输入正确的手机号码'); return; }
+      if (password.length < 6) { _toast('密码不能少于6位'); return; }
+      if (password.length > 20) { _toast('密码不能超过20位'); return; }
+      if (password != password2) { _toast('两次密码不一致'); return; }
+      if (nickname.isEmpty) { _toast('请输入昵称'); return; }
+      if (inviter.isEmpty) { _toast('请输入推荐码'); return; }
+      if (!RegExp(r'^\d+$').hasMatch(inviter)) { _toast('推荐码格式不正确（应为数字）'); return; }
+
+      // ★ 2. 增加验证码的本地非空校验（后端还会校验是否正确）
+      if (code.isEmpty) { _toast('请输入图形验证码'); return; }
+
+      setState(() => _submitting = true);
+      try {
+        final res = await HttpClient.instance.dio.post(
+          ApiConfig.register,
+          data: {
+            'mobile': mobile,
+            'password': password,
+            'nickname': nickname,
+            'inviter_code': inviter,
+            'code': code, // ★ 3. 把验证码传给后端
+          },
+          options: Options(contentType: Headers.formUrlEncodedContentType),
+        );
+
+        // ====== 下面的 catch 和 finally 保持你原来的不变 ======
+        dynamic data = res.data;
+        if (data is String) {
+          try { data = jsonDecode(data); } catch (_) {}
+        }
+
+        if (data is Map && data['status'] == 1) {
+          _toast('注册成功');
+          await Future.delayed(const Duration(milliseconds: 800));
+          if (!mounted) return;
+          Navigator.of(context).pop(mobile);
+        } else {
+          _toast(data is Map ? (data['result']?.toString() ?? '注册失败') : '注册失败');
+          // 如果后端报错（比如验证码错误），记得刷新一下验证码，防止一直错
+          _refreshCaptcha();
+        }
+      } catch (e) {
+        debugPrint('❌ [register] $e');
+        _toast('网络错误，请稍后重试');
+      } finally {
+        if (mounted) setState(() => _submitting = false);
+      }
+    }
 
   void _openDownloadSheet() {
     setState(() => _showDownloadSheet = true);
@@ -320,6 +354,61 @@ class _RegisterPageState extends State<RegisterPage> {
                   digitsOnly: true,
                   isLast: true,
                 ),
+                                const Divider(height: 1, color: Color(0xFFF0F0F4)),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 15),
+                                  child: Row(
+                                    children: [
+                                      const SizedBox(
+                                        width: 30,
+                                        child: Icon(Icons.verified_user_outlined, size: 16, color: Color(0xFF999999)),
+                                      ),
+                                      const SizedBox(
+                                        width: 60,
+                                        child: Text('验证码', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF555555))),
+                                      ),
+                                      Container(width: 1, height: 16, color: const Color(0xFFF0F0F4)),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _codeCtrl,
+                                          keyboardType: TextInputType.text,
+                                          maxLength: 4,
+                                          style: const TextStyle(fontSize: 15, color: Color(0xFF111111)),
+                                          decoration: const InputDecoration(
+                                            border: InputBorder.none,
+                                            isDense: true,
+                                            contentPadding: EdgeInsets.zero,
+                                            counterText: '',
+                                            hintText: '请输入验证码',
+                                            hintStyle: TextStyle(fontSize: 14, color: Color(0xFF999999), fontWeight: FontWeight.w300),
+                                          ),
+                                        ),
+                                      ),
+                                      // 验证码图片
+                                      GestureDetector(
+                                        onTap: _refreshCaptcha,
+                                        child: Container(
+                                          width: 100,
+                                          height: 40,
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFF5F7FA),
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          alignment: Alignment.center,
+                                          child: _loadingCaptcha
+                                              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                                              : (_captchaBase64.isEmpty
+                                                  ? const Text('点击获取', style: TextStyle(fontSize: 12, color: Color(0xFF007AFF)))
+                                                  : Image.memory(
+                                                      base64Decode(_captchaBase64),
+                                                      fit: BoxFit.contain,
+                                                    )),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
               ],
             ),
           ),

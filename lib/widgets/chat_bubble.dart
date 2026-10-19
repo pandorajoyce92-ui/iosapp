@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:gal/gal.dart';
 import 'package:http/http.dart' as http;
+import 'package:cached_network_image/cached_network_image.dart';
+import '../core/app_cache_manager.dart';
 
 import '../models/chat_message.dart';
 
@@ -38,25 +40,40 @@ class ChatBubble extends StatelessWidget {
     return _buildNormalBubble(context, isSelf);
   }
 
-      Widget _buildAvatar(String url) {
-        if (url.isEmpty) {
-          return Container(
-            width: 44, height: 44,
-            color: const Color(0xFFF0ECFF),
-            alignment: Alignment.center,
-            child: const Icon(Icons.person, size: 24, color: Color(0xFF7C5CFC)),
-          );
-        }
-        return Image.network(
-          url, width: 44, height: 44, fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => Container(
-            width: 44, height: 44,
-            color: const Color(0xFFF0ECFF),
-            alignment: Alignment.center,
-            child: const Icon(Icons.person, size: 24, color: Color(0xFF7C5CFC)),
-          ),
-        );
-      }
+            Widget _buildAvatar(String url) {
+              if (url.isEmpty) {
+                return Container(
+                  width: 44, height: 44,
+                  color: const Color(0xFFF0ECFF),
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.person, size: 24, color: Color(0xFF7C5CFC)),
+                );
+              }
+              return Image(
+                image: CachedNetworkImageProvider(
+                  url,
+                  cacheManager: AppCacheManager.instance, // ★ 启用全局缓存
+                ),
+                width: 44, height: 44, fit: BoxFit.cover,
+                gaplessPlayback: true, // ★★★ 新增这一行 ★★★
+                frameBuilder: (_, child, __, ___) => child, // ★ 秒出无闪烁
+                loadingBuilder: (_, child, progress) {
+                  if (progress == null) return child;
+                  return Container(
+                    width: 44, height: 44,
+                    color: const Color(0xFFF0ECFF),
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.person, size: 24, color: Color(0xFF7C5CFC)),
+                  );
+                },
+                errorBuilder: (_, __, ___) => Container(
+                  width: 44, height: 44,
+                  color: const Color(0xFFF0ECFF),
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.person, size: 24, color: Color(0xFF7C5CFC)),
+                ),
+              );
+            }
 
   Widget _avatarBox(String url) {
     return ClipRRect(
@@ -137,20 +154,33 @@ class ChatBubble extends StatelessWidget {
             color: bgColor,
             borderRadius: BorderRadius.circular(6),
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: Image.network(
-              msg.content,
-              width: 180,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(
-                width: 180, height: 120,
-                color: const Color(0xFFEEEEEE),
-                alignment: Alignment.center,
-                child: const Icon(Icons.broken_image, color: Color(0xFFCCCCCC)),
-              ),
-            ),
-          ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: Image(
+                        image: CachedNetworkImageProvider(
+                          msg.content,
+                          cacheManager: AppCacheManager.instance, // ★ 启用全局缓存
+                        ),
+                        width: 180,
+                        fit: BoxFit.cover,
+                        frameBuilder: (_, child, __, ___) => child, // ★ 秒出无闪烁
+                        loadingBuilder: (_, child, progress) {
+                          if (progress == null) return child;
+                          return Container(
+                            width: 180, height: 120,
+                            color: const Color(0xFFEEEEEE),
+                            alignment: Alignment.center,
+                            child: const CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFCCCCCC)),
+                          );
+                        },
+                        errorBuilder: (_, __, ___) => Container(
+                          width: 180, height: 120,
+                          color: const Color(0xFFEEEEEE),
+                          alignment: Alignment.center,
+                          child: const Icon(Icons.broken_image, color: Color(0xFFCCCCCC)),
+                        ),
+                      ),
+                    ),
         ),
       );
     }

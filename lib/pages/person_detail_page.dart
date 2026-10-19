@@ -4,6 +4,8 @@ import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'chat_room_page.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../core/app_cache_manager.dart';
 
 import '../core/config.dart';
 import '../core/theme.dart';
@@ -267,13 +269,16 @@ class _PersonDetailPageState extends State<PersonDetailPage> {
         children: [
           Positioned(
             left: 8, top: 0, bottom: 0,
-            child: GestureDetector(
-              onTap: () => Navigator.of(context).pop(_deleted),
-              child: const SizedBox(
-                width: 40, height: 40,
-                child: Icon(CupertinoIcons.back, color: Colors.black, size: 22),
-              ),
-            ),
+                        child: GestureDetector(
+                          onTap: () => Navigator.of(context).pop(_deleted),
+                          behavior: HitTestBehavior.opaque, // ★ 强制拦截点击
+                          child: Container(
+                            width: 50,
+                            height: 44, // 撑满高度，更好点
+                            alignment: Alignment.center,
+                            child: const Icon(CupertinoIcons.back, color: Colors.black, size: 24),
+                          ),
+                        ),
           ),
           const Center(
             child: Text(
@@ -337,16 +342,24 @@ class _PersonDetailPageState extends State<PersonDetailPage> {
       ),
       child: Row(
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: _avatarUrl.isEmpty
-                ? _defaultAvatar()
-                : Image.network(
-                    _avatarUrl,
-                    width: 60, height: 60, fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _defaultAvatar(),
-                  ),
-          ),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: _avatarUrl.isEmpty
+                          ? _defaultAvatar()
+                          : Image(
+                              image: CachedNetworkImageProvider(
+                                _avatarUrl,
+                                cacheManager: AppCacheManager.instance, // ★ 全局持久化缓存
+                              ),
+                              width: 60, height: 60, fit: BoxFit.cover,
+                              frameBuilder: (_, child, __, ___) => child, // ★ 秒出无闪烁
+                              loadingBuilder: (_, child, progress) {
+                                if (progress == null) return child;
+                                return _defaultAvatar();
+                              },
+                              errorBuilder: (_, __, ___) => _defaultAvatar(),
+                            ),
+                    ),
           const SizedBox(width: 16),
           Expanded(
             child: Column(
