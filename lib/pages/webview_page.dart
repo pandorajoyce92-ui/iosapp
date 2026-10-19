@@ -30,6 +30,8 @@ class _WebViewPageState extends State<WebViewPage> {
     super.initState();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      // ★★★ 关键修改：给 WebView 设置专属 User-Agent，让后端认出这是 App ★★★
+      ..setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 JianxinApp/1.0')
       ..setNavigationDelegate(NavigationDelegate(
         onPageStarted: (_) => setState(() => _loading = true),
         onPageFinished: (_) => setState(() => _loading = false),
@@ -112,16 +114,14 @@ class _WebViewPageState extends State<WebViewPage> {
         ],
       );
 
-      // 如果外部要求隐藏 AppBar，保持原样全屏显示（通常是用于特殊场景）
       if (widget.hideAppBar) {
         return Scaffold(body: SafeArea(child: body));
       }
 
-      // ★★★ 统一风格：渐变背景 + 透明自定义导航栏 ★★★
       return AnnotatedRegion<SystemUiOverlayStyle>(
         value: const SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
-          statusBarIconBrightness: Brightness.dark, // 黑色时间/电量
+          statusBarIconBrightness: Brightness.dark,
           statusBarBrightness: Brightness.light,
         ),
         child: Container(
@@ -134,12 +134,10 @@ class _WebViewPageState extends State<WebViewPage> {
             ),
           ),
           child: Scaffold(
-            backgroundColor: Colors.transparent, // 透出渐变
+            backgroundColor: Colors.transparent,
             body: Column(
               children: [
                 SizedBox(height: MediaQuery.of(context).padding.top),
-
-                // 自定义的透明导航栏
                 Container(
                   height: 44,
                   color: Colors.transparent,
@@ -170,12 +168,10 @@ class _WebViewPageState extends State<WebViewPage> {
                     ],
                   ),
                 ),
-
-                // WebView 内容区域（加个顶部小圆角显得更精致）
                 Expanded(
                   child: ClipRRect(
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-                    child: body, // 渲染 WebView 和 Loading
+                    child: body,
                   ),
                 ),
               ],

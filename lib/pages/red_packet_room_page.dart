@@ -1227,11 +1227,68 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     }
   }
 
-    Future<void> _showRedDetail(String setid) async {
+            Future<void> _showRedDetail(String setid) async {
+              try {
+                final res = await HttpClient.instance.dio.post(
+                  '${ApiConfig.redpackets}&roomid=${widget.roomid}',
+                  data: {'op': 'getreddetail', 'setid': setid},
+                  options: Options(
+                    contentType: Headers.formUrlEncodedContentType,
+                    responseType: ResponseType.plain,
+                  ),
+                );
+                dynamic data = res.data;
+                if (data is String) {
+                  try { data = jsonDecode(data); } catch (_) {}
+                }
+                if (data is! Map || data['status']?.toString() != '1' || data['result'] is! Map) {
+                  _toast(data is Map ? (data['result']?.toString() ?? '加载失败') : '加载失败');
+                  return;
+                }
+                final r = Map<String, dynamic>.from(data['result']);
+                if (!mounted) return;
+
+                // 处理免死机器人金额打码
+                if (r['list'] is List) {
+                  final List<dynamic> logList = r['list'];
+                  for (var log in logList) {
+                    if (log is Map) {
+                      final nickname = log['nickname']?.toString() ?? '';
+                      if (nickname == '免死' || nickname.startsWith('免死')) {
+                        final String moneyStr = log['money']?.toString() ?? '';
+                        if (moneyStr.isNotEmpty) {
+                          log['money'] = moneyStr.substring(0, moneyStr.length - 1) + '*';
+                        }
+                      }
+                    }
+                  }
+                }
+
+                // ★ 改为 CupertinoPageRoute 支持 iOS 侧滑
+                await Navigator.push(
+                  context,
+                  CupertinoPageRoute(
+                    builder: (_) => RedPacketDetailPanel(
+                      data: r,
+                      onOpenReport: () {
+                        // ★ 关键修改：不要 pop 关闭详情页，直接调用打开记录页！
+                        // 这样记录页会直接盖在详情页上面，返回时自然退回详情页
+                        _showRedReport();
+                      },
+                    ),
+                  ),
+                );
+              } catch (e) {
+                debugPrint('❌ [getreddetail] $e');
+                _toast('网络错误');
+              }
+            }
+
+    Future<void> _showRedReport() async {
       try {
         final res = await HttpClient.instance.dio.post(
           '${ApiConfig.redpackets}&roomid=${widget.roomid}',
-          data: {'op': 'getreddetail', 'setid': setid},
+          data: {'op': 'getrecord', 'roomid': widget.roomid, 'type': 1},
           options: Options(
             contentType: Headers.formUrlEncodedContentType,
             responseType: ResponseType.plain,
@@ -1242,96 +1299,24 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
           try { data = jsonDecode(data); } catch (_) {}
         }
         if (data is! Map || data['status']?.toString() != '1' || data['result'] is! Map) {
-          _toast(data is Map ? (data['result']?.toString() ?? '加载失败') : '加载失败');
+          _toast('加载失败');
           return;
         }
         final r = Map<String, dynamic>.from(data['result']);
         if (!mounted) return;
 
-        // ★★★ 新增：处理免死机器人金额打码（隐藏最后一位） ★★★
-        if (r['list'] is List) {
-          final List<dynamic> logList = r['list'];
-          for (var log in logList) {
-            if (log is Map) {
-              final nickname = log['nickname']?.toString() ?? '';
-              // 判断是否是免死机器人（兼容“免死”两个字或者带有“免死”前缀）
-              if (nickname == '免死' || nickname.startsWith('免死')) {
-                final String moneyStr = log['money']?.toString() ?? '';
-                if (moneyStr.isNotEmpty) {
-                  // 把最后一位字符替换成 *
-                  log['money'] = moneyStr.substring(0, moneyStr.length - 1) + '*';
-                }
-              }
-            }
-          }
-        }
-        // ★★★ 处理结束 ★★★
-
-        await showGeneralDialog(
-          context: context,
-          barrierDismissible: false,
-          barrierColor: Colors.transparent,
-          transitionDuration: const Duration(milliseconds: 280),
-          pageBuilder: (_, __, ___) => RedPacketDetailPanel(
-            data: r,
-            onOpenReport: () {
-              Navigator.of(context).pop();
-              _showRedReport();
-            },
-          ),
-          transitionBuilder: (_, anim, __, child) => SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(0, 1),
-              end: Offset.zero,
-            ).animate(CurvedAnimation(parent: anim, curve: Curves.easeOutCubic)),
-            child: child,
+        // ★ 注意这里：改成了 RedReportPanel，这是专门用来显示红包记录的面板
+        await Navigator.push(
+          context,
+          CupertinoPageRoute(
+            builder: (_) => RedReportPanel(data: r),
           ),
         );
       } catch (e) {
-        debugPrint('❌ [getreddetail] $e');
+        debugPrint('❌ [getrecord] $e');
         _toast('网络错误');
       }
     }
-
-  Future<void> _showRedReport() async {
-    try {
-      final res = await HttpClient.instance.dio.post(
-        '${ApiConfig.redpackets}&roomid=${widget.roomid}',
-        data: {'op': 'getrecord', 'roomid': widget.roomid, 'type': 1},
-        options: Options(
-          contentType: Headers.formUrlEncodedContentType,
-          responseType: ResponseType.plain,
-        ),
-      );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
-      }
-      if (data is! Map || data['status']?.toString() != '1' || data['result'] is! Map) {
-        _toast('加载失败');
-        return;
-      }
-            final r = Map<String, dynamic>.from(data['result']);
-            if (!mounted) return;
-
-            // ★ 改为 CupertinoPageRoute 以支持 iOS 侧滑返回
-            await Navigator.push(
-              context,
-              CupertinoPageRoute(
-                builder: (_) => RedPacketDetailPanel(
-                  data: r,
-                  onOpenReport: () {
-                    Navigator.of(context).pop(); // 先关闭详情页
-                    _showRedReport();            // 再打开举报页
-                  },
-                ),
-              ),
-            );
-    } catch (e) {
-      debugPrint('❌ [getrecord] $e');
-      _toast('网络错误');
-    }
-  }
 
   Widget _buildInputBar() {
     return Container(

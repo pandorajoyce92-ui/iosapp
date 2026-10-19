@@ -30,6 +30,7 @@ class HttpClient {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 JianxinApp/1.0',
         'X-Requested-With': 'XMLHttpRequest',
+        'X-App-Client': 'JianxinApp', // ★★★ 新增：App专属标识，用于后端拦截H5 ★★★
       },
     ));
 
@@ -97,7 +98,6 @@ class HttpClient {
     }
 
     if (data is Map) {
-      // 根据你的后端返回，未登录通常 status 为 0 或 -1，msg 带有"请先登录"等字样
       final status = data['status']?.toString() ?? '1';
       final msg = data['msg']?.toString() ?? data['result']?.toString() ?? '';
 
@@ -113,11 +113,7 @@ class HttpClient {
   Future<void> _forceLogout() async {
     _isLoggingOut = true;
     try {
-      // 1. 清空本地 Cookie
       await cookieJar.deleteAll();
-      // 2. 清空其他缓存（如果有的话）
-
-      // 3. 全局跳转到登录页，并清空所有历史页面
       navigatorKey.currentState?.pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginPage()),
         (route) => false,
