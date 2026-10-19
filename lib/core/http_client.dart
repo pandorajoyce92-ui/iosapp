@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
@@ -30,7 +31,7 @@ class HttpClient {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 JianxinApp/1.0',
         'X-Requested-With': 'XMLHttpRequest',
-        'X-App-Client': 'JianxinApp', // ★★★ 新增：App专属标识，用于后端拦截H5 ★★★
+        'X-App-Client': 'JianxinApp', // App专属标识，用于后端拦截H5
       },
     ));
 
@@ -41,6 +42,43 @@ class HttpClient {
       storage: FileStorage('${dir.path}/.cookies'),
     );
     dio.interceptors.add(CookieManager(cookieJar));
+
+    // ★★★ 核心新增：iOS 首次网络授权自动重试拦截器 ★★★
+    dio.interceptors.add(InterceptorsWrapper(
+      onError: (error, handler) async {
+        // 判断是否是首次安装时，iOS 网络权限弹窗未出现导致的连接错误
+        bool isNetworkPermissionError = (error.error is SocketException) ||
+                                        (error.type == DioExceptionType.connectionError) ||
+                                        (error.type == DioExceptionType.connectionTimeout) ||
+                                        (error.type == DioExceptionType.unknown);
+
+        // 检查是否已经重试过（防止死循环）
+        bool hasRetried = error.requestOptions.extra['has_retried'] == true;
+
+        if (isNetworkPermissionError && !hasRetried) {
+          debugPrint('⚠️ 捕获到首次网络请求异常，可能是 iOS 权限拦截，等待 1.5 秒后自动重试...');
+
+          // 等待 1.5 秒，给用户时间点击“允许网络”弹窗
+          await Future.delayed(const Duration(milliseconds: 1500));
+
+          try {
+            // 标记为已重试
+            error.requestOptions.extra['has_retried'] = true;
+
+            // 使用相同的配置重新发起请求
+            final response = await dio.fetch(error.requestOptions);
+            return handler.resolve(response); // 重试成功，返回正确数据
+          } catch (e) {
+            // 如果重试还失败，就走原来的报错逻辑
+            return handler.next(error);
+          }
+        }
+
+        // 其他错误正常抛出
+        return handler.next(error);
+      },
+    ));
+    // ★★★ 新增结束 ★★★
 
     // 日志拦截器：仅在 Debug 模式下打印
     if (kDebugMode) {
@@ -67,7 +105,7 @@ class HttpClient {
       ));
     }
 
-    // ★★★ 新增：拦截未登录状态 ★★★
+    // 拦截未登录状态
     dio.interceptors.add(InterceptorsWrapper(
       onResponse: (response, handler) {
         _checkResponse(response);
@@ -82,7 +120,7 @@ class HttpClient {
     ));
   }
 
-  // ★★★ 新增：检查是否未登录并强制登出 ★★★
+  // 检查是否未登录并强制登出
   bool _isLoggingOut = false;
 
   Future<void> _checkResponse(Response response) async {
@@ -109,7 +147,7 @@ class HttpClient {
     }
   }
 
-  // ★★★ 新增：执行强制登出 ★★★
+  // 执行强制登出
   Future<void> _forceLogout() async {
     _isLoggingOut = true;
     try {
