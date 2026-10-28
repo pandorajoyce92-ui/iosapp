@@ -42,6 +42,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
   String _announcement = '';
   int _myUid = 0;
   int _ownerUid = 0;
+  String _roomRuleImg = '';
   double _roomMin = 0;
   double _roomMax = 999999;
   bool _noPayPwd = false;
@@ -98,6 +99,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
             _myUid = int.tryParse(member['id']?.toString() ?? '0') ?? 0;
             _ownerUid = int.tryParse(r['owner_uid']?.toString() ?? '0') ?? 0;
             _announcement = roominfo['announcement']?.toString() ?? '';
+            _roomRuleImg = r['ruleimg']?.toString() ?? '';
             _roomMin = double.tryParse(r['min']?.toString() ?? '0') ?? 0;
             _roomMax = double.tryParse(r['max']?.toString() ?? '999999') ?? 999999;
             _noPayPwd = (r['nopaypwd']?.toString() == '1');
@@ -156,6 +158,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
           _myUid = int.tryParse(member['id']?.toString() ?? '0') ?? 0;
           _ownerUid = int.tryParse(r['owner_uid']?.toString() ?? '0') ?? 0;
           _announcement = roominfo['announcement']?.toString() ?? '';
+          _roomRuleImg = r['ruleimg']?.toString() ?? '';
           _roomMin = double.tryParse(r['min']?.toString() ?? '0') ?? 0;
           _roomMax = double.tryParse(r['max']?.toString() ?? '999999') ?? 999999;
           _noPayPwd = (r['nopaypwd']?.toString() == '1');
@@ -191,16 +194,17 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     _cacheWriteTimer?.cancel();
     _cacheWriteTimer = Timer(const Duration(milliseconds: 800), () async {
       if (!mounted) return;
-      final payload = <String, dynamic>{
-        'member': {'id': _myUid},
-        'roominfo': {'announcement': _announcement},
-        'owner_uid': _ownerUid,
-        'min': _roomMin,
-        'max': _roomMax,
-        'nopaypwd': _noPayPwd ? 1 : 0,
-        'finances': _finances,
-        'old_messages': _messages,
-      };
+            final payload = <String, dynamic>{
+              'member': {'id': _myUid},
+              'roominfo': {'announcement': _announcement},
+              'owner_uid': _ownerUid,
+              'min': _roomMin,
+              'max': _roomMax,
+              'nopaypwd': _noPayPwd ? 1 : 0,
+              'ruleimg': _roomRuleImg,   // ★★★ 新增
+              'finances': _finances,
+              'old_messages': _messages,
+            };
       await DataCache.set('rp_room_${widget.roomid}', payload);
     });
   }
@@ -630,22 +634,30 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     );
   }
 
-  Widget _buildMessageList() {
-    if (_messages.isEmpty) {
-      return const Center(
-        child: Text('暂无消息', style: TextStyle(color: Color(0xFF999999))),
+    Widget _buildMessageList() {
+      if (_messages.isEmpty) {
+        return const Center(child: Text('暂无消息', style: TextStyle(color: Color(0xFF999999))));
+      }
+      return ListView.builder(
+        controller: _scrollCtrl,
+        padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
+        itemCount: _messages.length,
+        itemBuilder: (_, i) {
+          final msg = _messages[i];
+          final widget = _buildMessage(msg);
+
+          // ★★★ 只要渲染出来的是被拦截的空白组件，直接连 Padding 一起干掉 ★★★
+          if (widget is SizedBox && widget.width == 0) {
+            return const SizedBox.shrink();
+          }
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: widget,
+          );
+        },
       );
     }
-    return ListView.builder(
-      controller: _scrollCtrl,
-      padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
-      itemCount: _messages.length,
-      itemBuilder: (_, i) => Padding(
-        padding: const EdgeInsets.only(bottom: 14),
-        child: _buildMessage(_messages[i]),
-      ),
-    );
-  }
 
   Widget _buildMessage(Map<String, dynamic> m) {
     final type = m['type']?.toString() ?? '';
@@ -892,24 +904,28 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     );
   }
 
-  Widget _buildSystemBubble(Map<String, dynamic> c) {
-    final content = _stripHtml(c['content']?.toString() ?? '');
-    if (content.isEmpty) return const SizedBox.shrink();
-    return Center(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(999),
+    Widget _buildSystemBubble(Map<String, dynamic> c) {
+      // ★ 把所有空格、换行符、制表符统统压缩成一个空格，彻底解决换行撑开高度的问题
+      final raw = _stripHtml(c['content']?.toString() ?? '');
+      final content = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+      if (content.isEmpty) return const SizedBox.shrink();
+
+      return Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(
+            content,
+            style: const TextStyle(fontSize: 11, color: Color(0xFF666666)),
+            textAlign: TextAlign.center,
+          ),
         ),
-        child: Text(
-          content,
-          style: const TextStyle(fontSize: 11, color: Color(0xFF666666)),
-          textAlign: TextAlign.center,
-        ),
-      ),
-    );
-  }
+      );
+    }
 
   Widget _buildWelfareBubble(Map<String, dynamic> c) {
     final nickname = c['nickname']?.toString() ?? '';
@@ -947,124 +963,140 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     );
   }
 
-  Widget _buildImageBubble(Map<String, dynamic> c, bool isSelf) {
-    final avatar = c['avatar']?.toString() ?? '';
-    final nickname = c['nickname']?.toString() ?? '';
-    final content = c['content']?.toString() ?? '';
+    Widget _buildImageBubble(Map<String, dynamic> c, bool isSelf) {
+      final avatar = c['avatar']?.toString() ?? '';
+      final nickname = c['nickname']?.toString() ?? '';
+      final content = c['content']?.toString() ?? '';
 
-    final isAsset = content.startsWith('asset://');
-    final assetPath = isAsset ? content.substring(8) : '';
+      // ★★★ 关键防御 1：如果没有图片地址，直接不渲染，防止生成幽灵空白 ★★★
+      if (content.isEmpty) {
+        return const SizedBox.shrink();
+      }
 
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisAlignment: isSelf ? MainAxisAlignment.end : MainAxisAlignment.start,
-      children: [
-        if (!isSelf) _avatar(avatar, size: 38),
-        if (!isSelf) const SizedBox(width: 8),
-        Column(
-          crossAxisAlignment: isSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-          children: [
-            Text(nickname, style: const TextStyle(fontSize: 11, color: Color(0xFF888888))),
-            const SizedBox(height: 4),
-            Container(
-              constraints: const BoxConstraints(maxWidth: 240),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: isAsset
-                    ? Image.asset(
-                        assetPath,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
-                          width: 100, height: 100, color: Colors.black12,
-                          alignment: Alignment.center,
-                          child: const Icon(Icons.broken_image),
-                        ),
-                      )
-                    : Image(
-                        image: CachedNetworkImageProvider(
-                          content,
-                          cacheManager: AppCacheManager.instance,
-                        ),
-                        fit: BoxFit.cover,
-                        frameBuilder: (_, child, __, ___) => child,
-                        loadingBuilder: (_, child, progress) {
-                          if (progress == null) return child;
-                          return Container(
-                            width: 100, height: 100, color: Colors.black12,
-                            alignment: Alignment.center,
-                            child: const CircularProgressIndicator(strokeWidth: 2),
-                          );
-                        },
-                        errorBuilder: (_, __, ___) => Container(
-                          width: 100, height: 100, color: Colors.black12,
-                          alignment: Alignment.center,
-                          child: const Icon(Icons.broken_image),
-                        ),
-                      ),
-              ),
-            ),
-          ],
-        ),
-        if (isSelf) const SizedBox(width: 8),
-        if (isSelf) _avatar(avatar, size: 38),
-      ],
-    );
-  }
+      final isAsset = content.startsWith('asset://');
+      final assetPath = isAsset ? content.substring(8) : '';
 
-  Widget _buildTextBubble(Map<String, dynamic> c, bool isSelf) {
-    final avatar = c['avatar']?.toString() ?? '';
-    final nickname = c['nickname']?.toString() ?? '';
-    final content = _stripHtml(c['content']?.toString() ?? '');
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisAlignment: isSelf ? MainAxisAlignment.end : MainAxisAlignment.start,
-      children: [
-        if (!isSelf) _avatar(avatar, size: 38),
-        if (!isSelf) const SizedBox(width: 8),
-        Flexible(
-          child: Column(
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: isSelf ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: [
+          if (!isSelf) _avatar(avatar, size: 38),
+          if (!isSelf) const SizedBox(width: 8),
+          Column(
             crossAxisAlignment: isSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
               Text(nickname, style: const TextStyle(fontSize: 11, color: Color(0xFF888888))),
               const SizedBox(height: 4),
               Container(
-                constraints: const BoxConstraints(maxWidth: 250),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: isSelf ? const Color(0xFF95EC69) : Colors.white,
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(isSelf ? 8 : 2),
-                    topRight: Radius.circular(isSelf ? 2 : 8),
-                    bottomLeft: const Radius.circular(8),
-                    bottomRight: const Radius.circular(8),
-                  ),
-                  boxShadow: isSelf
-                      ? null
-                      : [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 4,
-                            offset: const Offset(0, 1),
+                // ★★★ 关键防御 2：保留最大高度限制，防止长图撑爆屏幕 ★★★
+                constraints: const BoxConstraints(maxWidth: 240, maxHeight: 300),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: isAsset
+                      ? Image.asset(
+                          assetPath,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => _buildErrorPlaceholder(),
+                        )
+                      : Image(
+                          image: CachedNetworkImageProvider(
+                            content,
+                            cacheManager: AppCacheManager.instance,
                           ),
-                        ],
-                ),
-                child: Text(
-                  content,
-                  style: TextStyle(
-                    fontSize: 14,
-                    height: 1.5,
-                    color: const Color(0xFF111111),
-                  ),
+                          fit: BoxFit.cover,
+                          frameBuilder: (_, child, __, ___) => child,
+                          loadingBuilder: (_, child, progress) {
+                            if (progress == null) return child;
+                            return Container(
+                              width: 100, height: 100, color: Colors.black12,
+                              alignment: Alignment.center,
+                              child: const CircularProgressIndicator(strokeWidth: 2),
+                            );
+                          },
+                          errorBuilder: (_, __, ___) => _buildErrorPlaceholder(),
+                        ),
                 ),
               ),
             ],
           ),
-        ),
-        if (isSelf) const SizedBox(width: 8),
-        if (isSelf) _avatar(avatar, size: 38),
-      ],
-    );
-  }
+          if (isSelf) const SizedBox(width: 8),
+          if (isSelf) _avatar(avatar, size: 38),
+        ],
+      );
+    }
+
+    // ★ 辅助方法：统一的图片加载失败占位，固定尺寸，绝不撑开
+    Widget _buildErrorPlaceholder() {
+      return Container(
+        width: 100, height: 100, color: Colors.black12,
+        alignment: Alignment.center,
+        child: const Icon(Icons.broken_image),
+      );
+    }
+
+    Widget _buildTextBubble(Map<String, dynamic> c, bool isSelf) {
+      final avatar = c['avatar']?.toString() ?? '';
+      final nickname = c['nickname']?.toString() ?? '';
+      String content = _stripHtml(c['content']?.toString() ?? '');
+
+      // ★★★ 终极防御：把连续的空行/换行全部压缩成 1 个 ★★★
+      content = content.replaceAll(RegExp(r'\n+'), '\n').trim();
+
+      // ★★★ 终极防御：如果是纯空格或空行，直接不渲染 ★★★
+      if (content.isEmpty) return const SizedBox.shrink();
+
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: isSelf ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: [
+          if (!isSelf) _avatar(avatar, size: 38),
+          if (!isSelf) const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: isSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              children: [
+                Text(nickname, style: const TextStyle(fontSize: 11, color: Color(0xFF888888))),
+                const SizedBox(height: 4),
+                Container(
+                  constraints: const BoxConstraints(maxWidth: 250),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isSelf ? const Color(0xFF95EC69) : Colors.white,
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(isSelf ? 8 : 2),
+                      topRight: Radius.circular(isSelf ? 2 : 8),
+                      bottomLeft: const Radius.circular(8),
+                      bottomRight: const Radius.circular(8),
+                    ),
+                    boxShadow: isSelf
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 4,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
+                  ),
+                  child: Text(
+                    content,
+                    maxLines: 15,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.5,
+                      color: const Color(0xFF111111),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (isSelf) const SizedBox(width: 8),
+          if (isSelf) _avatar(avatar, size: 38),
+        ],
+      );
+    }
 
   Widget _avatar(String url, {double size = 38}) {
     return ClipRRect(
@@ -1248,16 +1280,22 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
                 final r = Map<String, dynamic>.from(data['result']);
                 if (!mounted) return;
 
-                // 处理免死机器人金额打码
+                // 处理免死机器人金额打码（★ 仅当红包未抢完时才打码）
                 if (r['list'] is List) {
                   final List<dynamic> logList = r['list'];
+                  final int nownums = int.tryParse(r['nownums']?.toString() ?? '0') ?? 0;
+                  final bool redFinished = nownums <= 0;  // true = 已抢完，显示完整金额
+
                   for (var log in logList) {
                     if (log is Map) {
                       final nickname = log['nickname']?.toString() ?? '';
                       if (nickname == '免死' || nickname.startsWith('免死')) {
-                        final String moneyStr = log['money']?.toString() ?? '';
-                        if (moneyStr.isNotEmpty) {
-                          log['money'] = moneyStr.substring(0, moneyStr.length - 1) + '*';
+                        // ★ 只有红包还没抢完时，才打码遮盖尾数
+                        if (!redFinished) {
+                          final String moneyStr = log['money']?.toString() ?? '';
+                          if (moneyStr.isNotEmpty) {
+                            log['money'] = moneyStr.substring(0, moneyStr.length - 1) + '*';
+                          }
                         }
                       }
                     }
@@ -1414,7 +1452,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
       _FuncItem('账单', Icons.receipt_long, const Color(0xFF5AC8FA), _onBill),
       _FuncItem('幸运抽奖', null, const Color(0xFF5AC8FA), _onLottery,
           customIcon: const _LotteryWheelIcon()),
-      _FuncItem('抢包奖励', Icons.emoji_events, const Color(0xFF5AC8FA), _onReward),
+      _FuncItem('群规', Icons.menu_book, const Color(0xFF5AC8FA), _onGroupRule),
       _FuncItem('联系财务', Icons.support_agent, const Color(0xFF5AC8FA), _onFinance),
       _FuncItem('联系群主', Icons.verified_user, const Color(0xFF5AC8FA), _onOwner),
       _FuncItem('照片', Icons.image, const Color(0xFF5AC8FA), _onPhoto),
@@ -1536,6 +1574,104 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
     );
   }
 
+    // ★★★ 新增：群规弹窗（群主可上传，普通玩家只读）★★★
+    Future<void> _onGroupRule() async {
+      setState(() => _showMorePanel = false);
+      _inputFocus.unfocus();
+
+      final isOwner = _myUid > 0 && _myUid == _ownerUid;
+
+      await showDialog(
+        context: context,
+        barrierColor: Colors.black.withOpacity(0.85),
+        builder: (_) => _GroupRuleDialog(
+          imageUrl: _roomRuleImg,
+          isOwner: isOwner,
+          onUpload: () async {
+            Navigator.of(context).pop();
+            await _pickAndUploadGroupRule();
+          },
+        ),
+      );
+    }
+
+    // ★★★ 新增：群主选图 → 上传 → 保存 ★★★
+    Future<void> _pickAndUploadGroupRule() async {
+      try {
+        final picker = ImagePicker();
+        final xfile = await picker.pickImage(
+          source: ImageSource.gallery,
+          maxWidth: 1500,
+          maxHeight: 6000,
+          imageQuality: 85,
+        );
+        if (xfile == null) return;
+
+        _toast('上传中，请稍候…');
+
+        final bytes = await xfile.readAsBytes();
+        final name = xfile.name.isEmpty ? 'group_rule.jpg' : xfile.name;
+
+        final formData = FormData.fromMap({
+          'file': MultipartFile.fromBytes(bytes, filename: name),
+        });
+
+        final uploadRes = await HttpClient.instance.dio.post(
+          ApiConfig.uploadGroupRule,
+          data: formData,
+          options: Options(
+            sendTimeout: const Duration(seconds: 90),
+            receiveTimeout: const Duration(seconds: 90),
+          ),
+        );
+
+        dynamic ud = uploadRes.data;
+        if (ud is String) {
+          try { ud = jsonDecode(ud); } catch (_) {}
+        }
+
+        String? url;
+        if (ud is Map && ud['status']?.toString() == '1') {
+          url = ud['url']?.toString();
+        }
+        if (url == null || url.isEmpty) {
+          _toast(ud is Map ? (ud['result']?.toString() ?? '上传失败') : '上传失败');
+          return;
+        }
+
+        final saveRes = await HttpClient.instance.dio.post(
+          '${ApiConfig.redpackets}&roomid=${widget.roomid}',
+          data: {'op': 'set_group_rule', 'ruleimg': url},
+          options: Options(
+            contentType: Headers.formUrlEncodedContentType,
+            responseType: ResponseType.plain,
+          ),
+        );
+
+        dynamic sd = saveRes.data;
+        if (sd is String) {
+          try { sd = jsonDecode(sd); } catch (_) {}
+        }
+
+        if (sd is Map && sd['status']?.toString() == '1') {
+          if (mounted) {
+            setState(() => _roomRuleImg = url!);
+            _scheduleCacheWrite();
+          }
+          _toast('群规已更新');
+          await Future.delayed(const Duration(milliseconds: 400));
+          if (mounted) await _onGroupRule();
+        } else {
+          _toast(sd is Map
+              ? (sd['result']?.toString() ?? sd['msg']?.toString() ?? '保存失败')
+              : '保存失败');
+        }
+      } catch (e) {
+        debugPrint('❌ [group_rule upload] $e');
+        _toast('上传失败，请重试');
+      }
+    }
+
   void _onFinance() {
     setState(() => _showMorePanel = false);
     if (_finances.isEmpty) {
@@ -1639,6 +1775,200 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
       debugPrint('❌ [photo] $e');
       _toast('上传失败：$e');
     }
+  }
+}
+
+// ★★★ 新增：群规弹窗（群主可上传，普通玩家只读） ★★★
+class _GroupRuleDialog extends StatelessWidget {
+  final String imageUrl;
+  final bool isOwner;
+  final VoidCallback onUpload;
+
+  const _GroupRuleDialog({
+    required this.imageUrl,
+    required this.isOwner,
+    required this.onUpload,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImage = imageUrl.isNotEmpty;
+    final screenH = MediaQuery.of(context).size.height;
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      // ★ 水平边距改 0，让图片真正等宽屏幕
+      insetPadding: const EdgeInsets.symmetric(horizontal: 0, vertical: 40),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: screenH * 0.9),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            color: const Color(0xFF1F1F1F),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 标题栏
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF1F1F1F),
+                    border: Border(
+                      bottom: BorderSide(color: Color(0xFF2E2E2E), width: 1),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Text(
+                        '群规',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const Spacer(),
+                      GestureDetector(
+                        onTap: () => Navigator.pop(context),
+                        behavior: HitTestBehavior.opaque,
+                        child: const Padding(
+                          padding: EdgeInsets.all(4),
+                          child: Icon(Icons.close, color: Colors.white70, size: 22),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // 图片/空状态区（可滚动）
+                Flexible(
+                  child: hasImage
+                      ? SingleChildScrollView(
+                          physics: const BouncingScrollPhysics(),
+                          child: Image(
+                            image: CachedNetworkImageProvider(
+                              imageUrl,
+                              cacheManager: AppCacheManager.instance,
+                            ),
+                            // ★ 宽度撑满（= 屏幕宽度），高度按比例
+                            width: double.infinity,
+                            fit: BoxFit.fitWidth,
+                            gaplessPlayback: true,
+                            frameBuilder: (_, child, __, ___) => child,
+                            loadingBuilder: (_, child, progress) {
+                              if (progress == null) return child;
+                              final total = progress.expectedTotalBytes ?? 0;
+                              final loaded = progress.cumulativeBytesLoaded;
+                              final ratio = total > 0 ? loaded / total : null;
+                              return Container(
+                                height: 220,
+                                alignment: Alignment.center,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    SizedBox(
+                                      width: 36,
+                                      height: 36,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2.5,
+                                        value: ratio,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Text(
+                                      ratio != null
+                                          ? '加载中 ${(ratio * 100).toInt()}%'
+                                          : '加载中…',
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                            errorBuilder: (_, __, ___) => const Padding(
+                              padding: EdgeInsets.all(40),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.broken_image,
+                                      color: Colors.white54, size: 80),
+                                  SizedBox(height: 12),
+                                  Text(
+                                    '图片加载失败',
+                                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        )
+                      : Padding(
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 60, horizontal: 20),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.menu_book_outlined,
+                                  color: Colors.white30, size: 80),
+                              const SizedBox(height: 16),
+                              Text(
+                                isOwner ? '还没有设置群规\n点击下方按钮上传' : '群主暂未设置群规',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
+                                  height: 1.6,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                ),
+
+                // 底部按钮（群主才显示）
+                if (isOwner)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF1F1F1F),
+                      border: Border(
+                        top: BorderSide(color: Color(0xFF2E2E2E), width: 1),
+                      ),
+                    ),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 46,
+                      child: ElevatedButton(
+                        onPressed: onUpload,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFE94848),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: Text(
+                          hasImage ? '更换群规' : '上传群规',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

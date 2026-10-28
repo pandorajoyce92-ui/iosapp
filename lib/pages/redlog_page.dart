@@ -111,20 +111,28 @@ class _RedlogPageState extends State<RedlogPage> {
     super.dispose();
   }
 
-    Future<void> _init() async {
-      // ★★★ 1. 优先读取本地缓存，瞬间渲染卡片和资产 ★★★
-      _loadCacheFirst();
+        Future<void> _init() async {
+          // ★★★ 新增：进入页面先清空旧数据，防止切换房间时残留上一个房间的数据 ★★★
+          setState(() {
+            _myCard = null;
+            _cards.clear();
+            _asset = '0.00';
+            _todayWin = '0.00';
+          });
 
-      // ★★★ 2. 并发拉取最新数据（不再等待 _loadRoles 完成） ★★★
-      await Future.wait([
-        _loadRoles(),
-        _loadAsset(),
-        _loadTodayWin(),
-        _loadCards(),
-      ]);
+          // ★★★ 1. 优先读取本地缓存，瞬间渲染卡片和资产 ★★★
+          _loadCacheFirst();
 
-      if (mounted) setState(() => _loading = false);
-    }
+          // ★★★ 2. 并发拉取最新数据（不再等待 _loadRoles 完成） ★★★
+          await Future.wait([
+            _loadRoles(),
+            _loadAsset(),
+            _loadTodayWin(),
+            _loadCards(),
+          ]);
+
+          if (mounted) setState(() => _loading = false);
+        }
 
     // ★ 新增：同步读缓存的方法
     void _loadCacheFirst() {
@@ -279,10 +287,10 @@ class _RedlogPageState extends State<RedlogPage> {
   // ★★★ 新增：加载卡片数据 ★★★
     Future<void> _loadCards() async {
       try {
-        final res = await HttpClient.instance.dio.get(
-          '${ApiConfig.redlog}&op=get_card_summary&roomid=${widget.roomid}',
-          options: Options(responseType: ResponseType.plain),
-        );
+              final res = await HttpClient.instance.dio.get(
+                '${ApiConfig.redlog}&op=get_card_summary&roomid=${widget.roomid}&start_date=${_fmtDate(_startDate)}&end_date=${_fmtDate(_endDate)}',
+                options: Options(responseType: ResponseType.plain),
+              );
         dynamic data = res.data;
         if (data is String) {
           try { data = jsonDecode(data); } catch (_) {}

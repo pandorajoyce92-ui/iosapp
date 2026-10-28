@@ -636,6 +636,68 @@ class _ChatRoomPageState extends State<ChatRoomPage> with WidgetsBindingObserver
     }
   }
 
+    Future<void> _handleGiftTap(ChatMessage msg) async {
+      final json = msg.toJson();
+      // 兼容解析 transfer_id 和 roomid
+      final transferId = int.tryParse(json['transfer_id']?.toString() ?? json['apply_id']?.toString() ?? '0') ?? 0;
+      final roomid = int.tryParse(json['roomid']?.toString() ?? '0') ?? 0;
+      final roomnums = json['roomnums']?.toString() ?? '';
+
+      if (transferId == 0) {
+        _toast('转账详情：${msg.status}');
+        return;
+      }
+
+      // 检查状态是否已领取
+      if (msg.status == '已领取' || msg.status == '对方已领取' || json['status']?.toString() == '1') {
+        _toast('该福利已被领取');
+        return;
+      }
+
+      // 不能领取自己发的
+      if (msg.uid == _myUid) {
+        _toast('这是您发送的福利');
+        return;
+      }
+
+      // 弹窗确认
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('领取福利'),
+          content: Text('确认领取 ${msg.amount.toStringAsFixed(2)} 元 到房间 $roomnums 吗？'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('确认领取', style: TextStyle(color: Color(0xFF07C160)))),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      try {
+        final res = await HttpClient.instance.dio.post(
+          '${ApiConfig.entryUrl}&p=chat_room',
+          data: {'op': 'receive_gift', 'transfer_id': transferId, 'roomid': roomid},
+          options: Options(contentType: Headers.formUrlEncodedContentType),
+        );
+        dynamic data = res.data;
+        if (data is String) {
+          try { data = jsonDecode(data); } catch (_) {}
+        }
+              if (data is Map && data['status'] == 1) {
+                _toast('领取成功');
+                // 拉取最新历史确保同步（后端拉取时会自动变成已领取）
+                await _pollNewMessages();
+        } else {
+          _toast((data is Map ? data['result']?.toString() : null) ?? '领取失败');
+        }
+      } catch (e) {
+        debugPrint('❌ 领取福利失败: $e');
+        _toast('网络错误');
+      }
+    }
+
   String _formatTimeSeparator(int timestamp) {
     if (timestamp <= 0) return '';
     final date = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000);

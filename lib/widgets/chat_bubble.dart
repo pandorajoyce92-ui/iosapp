@@ -40,40 +40,40 @@ class ChatBubble extends StatelessWidget {
     return _buildNormalBubble(context, isSelf);
   }
 
-            Widget _buildAvatar(String url) {
-              if (url.isEmpty) {
-                return Container(
-                  width: 44, height: 44,
-                  color: const Color(0xFFF0ECFF),
-                  alignment: Alignment.center,
-                  child: const Icon(Icons.person, size: 24, color: Color(0xFF7C5CFC)),
-                );
-              }
-              return Image(
-                image: CachedNetworkImageProvider(
-                  url,
-                  cacheManager: AppCacheManager.instance, // ★ 启用全局缓存
-                ),
-                width: 44, height: 44, fit: BoxFit.cover,
-                gaplessPlayback: true, // ★★★ 新增这一行 ★★★
-                frameBuilder: (_, child, __, ___) => child, // ★ 秒出无闪烁
-                loadingBuilder: (_, child, progress) {
-                  if (progress == null) return child;
-                  return Container(
-                    width: 44, height: 44,
-                    color: const Color(0xFFF0ECFF),
-                    alignment: Alignment.center,
-                    child: const Icon(Icons.person, size: 24, color: Color(0xFF7C5CFC)),
-                  );
-                },
-                errorBuilder: (_, __, ___) => Container(
-                  width: 44, height: 44,
-                  color: const Color(0xFFF0ECFF),
-                  alignment: Alignment.center,
-                  child: const Icon(Icons.person, size: 24, color: Color(0xFF7C5CFC)),
-                ),
-              );
-            }
+  Widget _buildAvatar(String url) {
+    if (url.isEmpty) {
+      return Container(
+        width: 44, height: 44,
+        color: const Color(0xFFF0ECFF),
+        alignment: Alignment.center,
+        child: const Icon(Icons.person, size: 24, color: Color(0xFF7C5CFC)),
+      );
+    }
+    return Image(
+      image: CachedNetworkImageProvider(
+        url,
+        cacheManager: AppCacheManager.instance,
+      ),
+      width: 44, height: 44, fit: BoxFit.cover,
+      gaplessPlayback: true,
+      frameBuilder: (_, child, __, ___) => child,
+      loadingBuilder: (_, child, progress) {
+        if (progress == null) return child;
+        return Container(
+          width: 44, height: 44,
+          color: const Color(0xFFF0ECFF),
+          alignment: Alignment.center,
+          child: const Icon(Icons.person, size: 24, color: Color(0xFF7C5CFC)),
+        );
+      },
+      errorBuilder: (_, __, ___) => Container(
+        width: 44, height: 44,
+        color: const Color(0xFFF0ECFF),
+        alignment: Alignment.center,
+        child: const Icon(Icons.person, size: 24, color: Color(0xFF7C5CFC)),
+      ),
+    );
+  }
 
   Widget _avatarBox(String url) {
     return ClipRRect(
@@ -154,33 +154,33 @@ class ChatBubble extends StatelessWidget {
             color: bgColor,
             borderRadius: BorderRadius.circular(6),
           ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: Image(
-                        image: CachedNetworkImageProvider(
-                          msg.content,
-                          cacheManager: AppCacheManager.instance, // ★ 启用全局缓存
-                        ),
-                        width: 180,
-                        fit: BoxFit.cover,
-                        frameBuilder: (_, child, __, ___) => child, // ★ 秒出无闪烁
-                        loadingBuilder: (_, child, progress) {
-                          if (progress == null) return child;
-                          return Container(
-                            width: 180, height: 120,
-                            color: const Color(0xFFEEEEEE),
-                            alignment: Alignment.center,
-                            child: const CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFCCCCCC)),
-                          );
-                        },
-                        errorBuilder: (_, __, ___) => Container(
-                          width: 180, height: 120,
-                          color: const Color(0xFFEEEEEE),
-                          alignment: Alignment.center,
-                          child: const Icon(Icons.broken_image, color: Color(0xFFCCCCCC)),
-                        ),
-                      ),
-                    ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: Image(
+              image: CachedNetworkImageProvider(
+                msg.content,
+                cacheManager: AppCacheManager.instance,
+              ),
+              width: 180,
+              fit: BoxFit.cover,
+              frameBuilder: (_, child, __, ___) => child,
+              loadingBuilder: (_, child, progress) {
+                if (progress == null) return child;
+                return Container(
+                  width: 180, height: 120,
+                  color: const Color(0xFFEEEEEE),
+                  alignment: Alignment.center,
+                  child: const CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFCCCCCC)),
+                );
+              },
+              errorBuilder: (_, __, ___) => Container(
+                width: 180, height: 120,
+                color: const Color(0xFFEEEEEE),
+                alignment: Alignment.center,
+                child: const Icon(Icons.broken_image, color: Color(0xFFCCCCCC)),
+              ),
+            ),
+          ),
         ),
       );
     }
@@ -198,7 +198,7 @@ class ChatBubble extends StatelessWidget {
     );
   }
 
-  // ===== 普通转账卡片 =====
+  // ===== 普通转账卡片 (type = 0) =====
   Widget _buildTransferCard(BuildContext context, bool isSelf) {
     final isSender = msg.uid == myUid;
     final avatar = isSender ? myAvatar : msg.avatarUrl;
@@ -248,12 +248,9 @@ class ChatBubble extends StatelessWidget {
 
   // ===== 充值/提现卡片（统一处理） =====
   Widget _buildApplyCard(BuildContext context, bool isSelf, {required bool isRecharge}) {
-    // 判断"我"是否发送者：msg.uid 或 playerUid 等于 myUid 都算
     final isSender = msg.uid == myUid || msg.playerUid == myUid;
-    // 财务视角：不是发送者，且卡片待处理 → 可点击
     final clickable = msg.applyStatus == 0 && !isSender;
 
-    // 根据 applyStatus 决定颜色
     List<Color> gradientColors;
     String titleText;
     String bodyText;
@@ -264,26 +261,22 @@ class ChatBubble extends StatelessWidget {
     final rn = msg.roomnums;
 
     if (msg.applyStatus == 0) {
-      // 待处理：橙红
       gradientColors = const [Color(0xFFFFB347), Color(0xFFFF8C00)];
       titleText = isRecharge ? '充值申请' : '提现申请';
       bodyText = '$playerNick 申请${isRecharge ? "充值" : "提现"} $amtStr 元（房间 $rn）';
       noteText = isSender ? '等待财务确认' : (clickable ? '点击处理' : '');
     } else if (msg.applyStatus == 1) {
-      // 已完成：蓝色
       gradientColors = const [Color(0xFF3B82F6), Color(0xFF1D4ED8)];
       titleText = isRecharge ? '充值已完成' : '提现已完成';
       bodyText = '$playerNick ${isRecharge ? "充值" : "提现"} $amtStr 元已完成（房间 $rn）';
       noteText = '已完成';
     } else {
-      // 已拒绝：红色
       gradientColors = const [Color(0xFFEF4444), Color(0xFFB91C1C)];
       titleText = isRecharge ? '充值已拒绝' : '提现已拒绝';
       bodyText = '$playerNick 申请${isRecharge ? "充值" : "提现"} $amtStr 元被拒绝（房间 $rn）';
       noteText = '已拒绝';
     }
 
-    // 头像：自己发的显示自己，对方发的显示对方
     final avatar = isSender ? myAvatar : (msg.avatarUrl.isEmpty ? friendAvatar : msg.avatarUrl);
 
     return Container(
@@ -297,9 +290,7 @@ class ChatBubble extends StatelessWidget {
           Flexible(
             child: GestureDetector(
               onTap: clickable
-                  ? () => isRecharge
-                      ? onTapRecharge?.call(msg)
-                      : onTapWithdraw?.call(msg)
+                  ? () => isRecharge ? onTapRecharge?.call(msg) : onTapWithdraw?.call(msg)
                   : null,
               child: Container(
                 constraints: const BoxConstraints(maxWidth: 260, minWidth: 200),
@@ -321,19 +312,12 @@ class ChatBubble extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(titleText,
-                        style: const TextStyle(
-                          color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold,
-                        )),
+                    Text(titleText, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
-                    Text(bodyText,
-                        style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.4)),
+                    Text(bodyText, style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.4)),
                     if (noteText.isNotEmpty) ...[
                       const SizedBox(height: 6),
-                      Text(noteText,
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.9), fontSize: 11,
-                          )),
+                      Text(noteText, style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 11)),
                     ],
                   ],
                 ),
@@ -347,64 +331,64 @@ class ChatBubble extends StatelessWidget {
     );
   }
 
-  // ===== 六合彩转账卡片 =====
-  Widget _buildLhcTransferCard(BuildContext context, bool isSelf) {
-    final isSender = msg.uid == myUid;
-    final avatar = isSender ? myAvatar : (msg.avatarUrl.isEmpty ? friendAvatar : msg.avatarUrl);
-    final amountText = '￥${msg.amount.toStringAsFixed(2)}';
+    // ===== 六合彩/福利转账卡片 =====
+    Widget _buildLhcTransferCard(BuildContext context, bool isSelf) {
+      final isSender = msg.uid == myUid;
+      final avatar = isSender ? myAvatar : (msg.avatarUrl.isEmpty ? friendAvatar : msg.avatarUrl);
+      final amountText = '￥${msg.amount.toStringAsFixed(2)}';
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      child: Row(
-        mainAxisAlignment: isSender ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (!isSender) _avatarBox(avatar),
-          if (!isSender) const SizedBox(width: 8),
-          Flexible(
-            child: Container(
-              constraints: const BoxConstraints(maxWidth: 240, minWidth: 200),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFFFF8C00), Color(0xFFE94848)],
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        child: Row(
+          mainAxisAlignment: isSender ? MainAxisAlignment.end : MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!isSender) _avatarBox(avatar),
+            if (!isSender) const SizedBox(width: 8),
+            Flexible(
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 240, minWidth: 200),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFFF8C00), Color(0xFFE94848)],
+                  ),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isSender ? '转给 ${msg.toNickname}' : '来自 ${msg.nickname} 的转账',
-                    style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(amountText,
-                      style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 4),
-                  Text(
-                    isSender ? '转账成功，已到账' : '已到账，可在账单查看',
-                    style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 11),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.only(top: 4),
-                    decoration: BoxDecoration(
-                      border: Border(top: BorderSide(color: Colors.white.withOpacity(0.25))),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isSender ? '转给 ${msg.toNickname}' : '来自 ${msg.nickname} 的转账',
+                      style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
                     ),
-                    child: Text('六合彩房间：${msg.roomnums}',
-                        style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 11)),
-                  ),
-                ],
+                    const SizedBox(height: 6),
+                    Text(amountText,
+                        style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    Text(
+                      isSender ? '转账成功，已到账' : '已到账，可在账单查看',
+                      style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 11),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.only(top: 4),
+                      decoration: BoxDecoration(
+                        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.25))),
+                      ),
+                      child: Text('房间：${msg.roomnums}',
+                          style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 11)),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          if (isSelf) const SizedBox(width: 8),
-          if (isSelf) _avatarBox(myAvatar),
-        ],
-      ),
-    );
-  }
+            if (isSelf) const SizedBox(width: 8),
+            if (isSelf) _avatarBox(myAvatar),
+          ],
+        ),
+      );
+    }
 }

@@ -56,6 +56,9 @@ class ApiConfig {
   // 个人资料 - 独立头像上传脚本
     static const String uploadAvatar     = '$baseUrl/app/upload_avatar.php';
 
+  // ★★★ 新增：群规图片上传（独立脚本，20M 限制）
+    static const String uploadGroupRule  = '$baseUrl/app/upload_group_rule.php';
+
   // 提现记录
     static const String withdrawalReport = '$entryUrl&p=withdrawal_report';
 
