@@ -33,12 +33,14 @@ class GroupApplyItem {
   final int uid;
   final String nickname;
   final String avatar;
+  final String inviterNickname;   // ★★★ 新增：推荐人昵称 ★★★
 
   GroupApplyItem({
     required this.id,
     required this.uid,
     required this.nickname,
     required this.avatar,
+    this.inviterNickname = '',    // ★★★ 新增：默认空串，兼容老接口 ★★★
   });
 
   factory GroupApplyItem.fromJson(Map<String, dynamic> json) => GroupApplyItem(
@@ -46,6 +48,7 @@ class GroupApplyItem {
         uid: _toInt(json['uid']),
         nickname: json['nickname']?.toString() ?? '',
         avatar: json['avatar']?.toString() ?? '',
+        inviterNickname: json['inviter_nickname']?.toString() ?? '',   // ★★★ 新增 ★★★
       );
 
   static int _toInt(dynamic v) {

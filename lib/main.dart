@@ -4,6 +4,7 @@ import 'core/http_client.dart';
 import 'core/sound_player.dart';
 import 'pages/login_page.dart';
 import 'core/data_cache.dart';
+import 'app_lifecycle_manager.dart'; // ★ 1. 引入刚才创建的文件
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,26 +23,28 @@ class JianxinApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      // ★★★ 挂载全局 Key ★★★
-      navigatorKey: HttpClient.instance.navigatorKey,
-      title: '简信红包',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        primarySwatch: Colors.purple,
-        useMaterial3: false,
+    // ★ 2. 用 AppLifecycleManager 包裹 MaterialApp
+    return AppLifecycleManager(
+      child: MaterialApp(
+        navigatorKey: HttpClient.instance.navigatorKey,
+        title: '简信红包',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          primarySwatch: Colors.purple,
+          useMaterial3: false,
+        ),
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: const [
+          Locale('zh', 'CN'),
+          Locale('en', 'US'),
+        ],
+        locale: const Locale('zh', 'CN'),
+        home: const LoginPage(),
       ),
-      localizationsDelegates: const [
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
-      ],
-      supportedLocales: const [
-        Locale('zh', 'CN'),
-        Locale('en', 'US'),
-      ],
-      locale: const Locale('zh', 'CN'),
-      home: const LoginPage(),
     );
   }
 }

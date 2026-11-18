@@ -654,7 +654,17 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
                                             ),
                                     ),
                   const SizedBox(width: 8),
-                  Expanded(child: Text(apply.nickname, style: const TextStyle(fontSize: 13))),
+                  Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(apply.nickname, style: const TextStyle(fontSize: 13)),
+                                          if (apply.inviterNickname.isNotEmpty)
+                                            Text('推荐人：${apply.inviterNickname}',
+                                                style: const TextStyle(fontSize: 11, color: Color(0xFF888888))),
+                                        ],
+                                      ),
+                                    ),
                   _buildSmallBtn('同意', const Color(0xFF28A745),
                       () => _approveGroupApply(apply.id, 'agree', room.roomId)),
                   const SizedBox(width: 5),
@@ -939,24 +949,49 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   }
 
   void _showSearchDialog() {
-    final controller = TextEditingController();
+    final roomController    = TextEditingController();
+    final inviterController = TextEditingController();
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('搜索房间'),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(hintText: '请输入房间号'),
+        title: const Text('申请进群'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: roomController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                hintText: '请输入房间号',
+                prefixIcon: Icon(Icons.meeting_room_outlined),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: inviterController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                hintText: '请输入推荐人 UID（必填）',
+                prefixIcon: Icon(Icons.person_outline),
+              ),
+            ),
+          ],
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
           TextButton(
             onPressed: () async {
-              final roomnum = controller.text.trim();
-              if (roomnum.isEmpty) return;
+              final roomnum = roomController.text.trim();
+              final inviterUid = inviterController.text.trim();
+              if (roomnum.isEmpty) { _toast('请输入房间号'); return; }
+              if (inviterUid.isEmpty) { _toast('请输入推荐人 UID'); return; }
+              if (!RegExp(r'^\d+$').hasMatch(inviterUid)) { _toast('推荐人 UID 格式错误'); return; }
               Navigator.pop(context);
-              final data = await _post(ApiConfig.redpackets, {'op': 'apply_to_join', 'roomnum': roomnum});
+              final data = await _post(ApiConfig.redpackets, {
+                'op': 'apply_to_join',
+                'roomnum': roomnum,
+                'inviter_uid': inviterUid,
+              });
               if (data is Map && data['status'] == 1) {
                 _toast('申请已提交');
                 _loadRooms();

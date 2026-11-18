@@ -20,7 +20,6 @@ class _RegisterPageState extends State<RegisterPage> {
   final _pwdCtrl      = TextEditingController();
   final _pwd2Ctrl     = TextEditingController();
   final _nicknameCtrl = TextEditingController();
-  final _inviterCtrl  = TextEditingController();
 
   bool _showPwd  = false;
   bool _showPwd2 = false;
@@ -45,7 +44,6 @@ class _RegisterPageState extends State<RegisterPage> {
     _pwdCtrl.dispose();
     _pwd2Ctrl.dispose();
     _nicknameCtrl.dispose();
-    _inviterCtrl.dispose();
     super.dispose();
   }
 
@@ -87,18 +85,13 @@ class _RegisterPageState extends State<RegisterPage> {
       final password   = _pwdCtrl.text;
       final password2  = _pwd2Ctrl.text;
       final nickname   = _nicknameCtrl.text.trim();
-      final inviter    = _inviterCtrl.text.trim();
-      final code       = _codeCtrl.text.trim(); // ★ 1. 获取验证码输入框的值
+      final code       = _codeCtrl.text.trim();
 
       if (!_isMobile(mobile)) { _toast('请输入正确的手机号码'); return; }
       if (password.length < 6) { _toast('密码不能少于6位'); return; }
       if (password.length > 20) { _toast('密码不能超过20位'); return; }
       if (password != password2) { _toast('两次密码不一致'); return; }
       if (nickname.isEmpty) { _toast('请输入昵称'); return; }
-      if (inviter.isEmpty) { _toast('请输入推荐码'); return; }
-      if (!RegExp(r'^\d+$').hasMatch(inviter)) { _toast('推荐码格式不正确（应为数字）'); return; }
-
-      // ★ 2. 增加验证码的本地非空校验（后端还会校验是否正确）
       if (code.isEmpty) { _toast('请输入图形验证码'); return; }
 
       setState(() => _submitting = true);
@@ -109,8 +102,8 @@ class _RegisterPageState extends State<RegisterPage> {
             'mobile': mobile,
             'password': password,
             'nickname': nickname,
-            'inviter_code': inviter,
-            'code': code, // ★ 3. 把验证码传给后端
+            // ★ 删掉 'inviter_code': inviter,
+            'code': code,
           },
           options: Options(contentType: Headers.formUrlEncodedContentType),
         );
@@ -343,16 +336,6 @@ class _RegisterPageState extends State<RegisterPage> {
                   label: '昵称',
                   controller: _nicknameCtrl,
                   hint: '请输入昵称',
-                ),
-                const Divider(height: 1, color: Color(0xFFF0F0F4)),
-                _buildField(
-                  icon: Icons.card_giftcard,
-                  label: '推荐码',
-                  controller: _inviterCtrl,
-                  hint: '请输入推荐人的推荐码（必填）',
-                  keyboardType: TextInputType.number,
-                  digitsOnly: true,
-                  isLast: true,
                 ),
                                 const Divider(height: 1, color: Color(0xFFF0F0F4)),
                                 Padding(

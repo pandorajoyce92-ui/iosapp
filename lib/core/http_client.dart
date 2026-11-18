@@ -137,10 +137,16 @@ class HttpClient {
 
     if (data is Map) {
       final status = data['status']?.toString() ?? '1';
-      final msg = data['msg']?.toString() ?? data['result']?.toString() ?? '';
+      // 兼容 msg 或 result 字段，或者 message 字段
+      final msg = data['msg']?.toString() ?? data['result']?.toString() ?? data['message']?.toString() ?? '';
 
       if (status == '0' || status == '-1') {
-        if (msg.contains('请先登录') || msg.contains('登录已过期') || msg.contains('用户不存在')) {
+        // ★★★ 修复：加上 '登录已失效' 和 '重新登录' 的匹配 ★★★
+        if (msg.contains('请先登录') ||
+            msg.contains('登录已过期') ||
+            msg.contains('用户不存在') ||
+            msg.contains('登录已失效') ||
+            msg.contains('重新登录')) {
           _forceLogout();
         }
       }
@@ -151,7 +157,10 @@ class HttpClient {
   Future<void> _forceLogout() async {
     _isLoggingOut = true;
     try {
+      // 1. 清空本地 Cookie
       await cookieJar.deleteAll();
+
+      // 2. 清空全局路由栈，跳转到登录页
       navigatorKey.currentState?.pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginPage()),
         (route) => false,

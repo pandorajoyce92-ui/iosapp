@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
@@ -29,7 +29,8 @@ class LiuhecaiRoomPage extends StatefulWidget {
   State<LiuhecaiRoomPage> createState() => _LiuhecaiRoomPageState();
 }
 
-class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
+class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> with WidgetsBindingObserver { // ★★★ 新增 with WidgetsBindingObserver
+
   String _announcement = '';
   int _myUid = 0;
   int _ownerUid = 0;
@@ -72,6 +73,7 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this); // ★★★ 新增：添加生命周期监听
     _scrollCtrl.addListener(_onScroll);
     _inputFocus.addListener(_onInputFocusChanged);
     _loadInitial();
@@ -89,6 +91,7 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this); // ★★★ 新增：移除生命周期监听
     _countdownTimer?.cancel();
     _syncTimer?.cancel();
     _socket?.disconnect();
@@ -100,6 +103,24 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
     _inputCtrl.dispose();
     super.dispose();
   }
+
+  // ★★★ 新增：APP 回到前台时的处理逻辑
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('🔄 六合彩房间回到前台，重连 Socket 并刷新数据');
+      if (_socket != null) {
+        if (!_socket!.connected) {
+          _socket!.connect();
+        }
+      } else {
+        _connectSocket();
+      }
+      _loadInitial();
+    }
+  }
+  // ★★★ 新增结束
 
   Future<void> _loadInitial() async {
     try {
@@ -139,8 +160,7 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
           _finances = fins;
 
           _periodNum = r['period_num']?.toString() ?? '';
-          _remainSeconds =
-              int.tryParse(r['remain_seconds']?.toString() ?? '0') ?? 0;
+          _remainSeconds = int.tryParse(r['remain_seconds']?.toString() ?? '0') ?? 0;
           _betClosed = _remainSeconds <= 30;
           _gameSettings = r['game_settings'] is Map
               ? Map<String, dynamic>.from(r['game_settings'])
@@ -191,8 +211,7 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
       if (data is Map && data['status'] == 1 && data['result'] is Map) {
         final r = Map<String, dynamic>.from(data['result']);
         final newPeriod = r['period_num']?.toString() ?? _periodNum;
-        final newRemain =
-            int.tryParse(r['remain_seconds']?.toString() ?? '0') ?? 0;
+        final newRemain = int.tryParse(r['remain_seconds']?.toString() ?? '0') ?? 0;
 
         if (!mounted) return;
         if (newPeriod != _periodNum) {
@@ -307,28 +326,25 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
           'reconnection': true,
           'reconnectionAttempts': 9999,
           'reconnectionDelay': 2000,
-          'forceNew': true,   // ★★★ 每次独立 socket，不复用
+          'forceNew': true,
         },
       );
 
-            _socket!.onConnect((_) {
-              debugPrint('✅ [liuhecai] socket connected');
-              _socket!.emit('addgroup', widget.roomid);
-              final ts = DateTime.now().millisecondsSinceEpoch;
-              _socket!.emit('login', '${ts}r${_myUid}r${widget.roomid}');
-              debugPrint('📡 [socket] emit addgroup=${widget.roomid}, login=${ts}r${_myUid}r${widget.roomid}');
-            });
+      _socket!.onConnect((_) {
+        debugPrint('✅ [liuhecai] socket connected');
+        _socket!.emit('addgroup', widget.roomid);
+        final ts = DateTime.now().millisecondsSinceEpoch;
+        _socket!.emit('login', '${ts}r${_myUid}r${widget.roomid}');
+      });
 
-            _socket!.on('roominfo', (msg) {
-              debugPrint('📥 [socket roominfo] 原始: $msg');
-                try {
-                  final str = msg.toString().replaceAll('&quot;', '"');
-                  final list = jsonDecode(str);
-                  if (list is! List) return;
-                  for (final item in list) {
-                    final m = Map<String, dynamic>.from(item);
-                    debugPrint('📥 [socket roominfo] type=${m['type']} uid=${m['uid']} contents=${m['contents']}');
-                    if (_messages.any((e) => e['id'] == m['id'])) continue;
+      _socket!.on('roominfo', (msg) {
+        try {
+          final str = msg.toString().replaceAll('&quot;', '"');
+          final list = jsonDecode(str);
+          if (list is! List) return;
+          for (final item in list) {
+            final m = Map<String, dynamic>.from(item);
+            if (_messages.any((e) => e['id'] == m['id'])) continue;
             if (m['type']?.toString() == '0' && m['contents'] is Map) {
               final c = m['contents'] as Map;
               final setid = c['setid']?.toString() ?? '';
@@ -346,27 +362,20 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
           debugPrint('❌ [roominfo] $e');
         }
       });
-
-            _socket!.onDisconnect((reason) {
-              debugPrint('⚠️ [liuhecai] socket disconnected, reason=$reason');
-            });
-            _socket!.onConnectError((e) {
-              debugPrint('❌ [liuhecai] socket connect_error: $e');
-            });
-            _socket!.onError((e) {
-              debugPrint('❌ [liuhecai] socket error: $e');
-            });
-
-            _socket!.connect();
-            debugPrint('📡 [socket] connect() 已调用, url=${ApiConfig.baseUrl}, roomid=${widget.roomid}');
     } catch (e) {
       debugPrint('❌ [liuhecai socket init] $e');
     }
   }
 
+  // ★★★ 修改：增加充值/提现拦截与跳转逻辑 ★★★
   Future<void> _sendText() async {
     final content = _inputCtrl.text.trim();
     if (content.isEmpty) return;
+
+    // 识别充值 / 提现口令
+    final isRecharge = RegExp(r'^充值\s*\d+$').hasMatch(content);
+    final isWithdraw = RegExp(r'^提现\s*\d+$').hasMatch(content);
+    final needJump = isRecharge || isWithdraw;
 
     try {
       final res = await HttpClient.instance.dio.post(
@@ -390,6 +399,46 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
         setState(() => _hasText = false);
         _inputFocus.unfocus();
         _scrollToBottom();
+
+        // ★★★ 核心跳转逻辑：如果检测到口令，拉取财务并跳转 ★★★
+        if (needJump) {
+          final redirect = data['redirect']?.toString() ?? '';
+          String targetFuid = '';
+
+          if (redirect.isNotEmpty) {
+            final match = RegExp(r'[?&]fuid=(\d+)').firstMatch(redirect);
+            if (match != null) {
+              targetFuid = match.group(1) ?? '';
+            }
+          }
+
+          if (targetFuid.isEmpty && _finances.isNotEmpty) {
+            targetFuid = _finances.first['id']?.toString() ?? '';
+          }
+
+          _toast('申请已提交，正在跳转...');
+          await Future.delayed(const Duration(milliseconds: 600));
+
+          if (targetFuid.isNotEmpty) {
+            final int fuid = int.tryParse(targetFuid) ?? 0;
+            if (fuid > 0 && mounted) {
+              Navigator.of(context).push(
+                CupertinoPageRoute(builder: (_) => ChatRoomPage(fuid: fuid)),
+              );
+              return;
+            }
+          }
+
+          if (redirect.isNotEmpty && mounted) {
+            Navigator.of(context).push(
+              CupertinoPageRoute(
+                builder: (_) => WebViewPage(url: redirect, title: '财务'),
+              ),
+            );
+          } else {
+            _toast('暂无财务人员，请前往通讯录查找');
+          }
+        }
       }
     } catch (e) {
       debugPrint('❌ [setmess] $e');
@@ -456,7 +505,6 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
     return '${ApiConfig.baseUrl}/${raw.replaceFirst(RegExp(r'^/+'), '')}';
   }
 
-  // ============ UI ============
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -505,7 +553,6 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
     );
   }
 
-  // ---- 顶部栏 ----
   Widget _buildHeader() {
     return Container(
       height: 44,
@@ -559,7 +606,6 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
     );
   }
 
-  // ---- 消息列表 ----
   Widget _buildMessageList() {
     if (_messages.isEmpty) {
       return const Center(
@@ -604,7 +650,6 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
     }
   }
 
-  // 六合彩红包气泡（保留橙红，红包象征色）
   Widget _buildLiuhecaiRedBubble(Map<String, dynamic> c, bool isSelf) {
     final nickname = c['nickname']?.toString() ?? '';
     final avatar = c['avatar']?.toString() ?? '';
@@ -662,59 +707,41 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Container(
-                        height: 70,
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [Color(0xFFFF7A38), Color(0xFFE94848)],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                        ),
-                        child: Stack(
-                          children: [
-                            Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  contentText,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  bottomText,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.white.withOpacity(0.9),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Positioned(
-                              right: 0,
-                              top: 0,
-                              bottom: 0,
-                              child: Center(
-                                child: Text(
-                                  '🧧',
-                                  style: TextStyle(
-                                    fontSize: 30,
-                                    color: Colors.white.withOpacity(0.8),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                                            Container(
+                                              height: 70,
+                                              padding: const EdgeInsets.symmetric(horizontal: 14),
+                                              decoration: const BoxDecoration(
+                                                gradient: LinearGradient(
+                                                  colors: [Color(0xFFFF7A38), Color(0xFFE94848)],
+                                                  begin: Alignment.topLeft,
+                                                  end: Alignment.bottomRight,
+                                                ),
+                                              ),
+                                              child: Column(
+                                                mainAxisAlignment: MainAxisAlignment.center,
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    contentText,
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: FontWeight.w600,
+                                                      color: Colors.white,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 2),
+                                                  Text(
+                                                    bottomText,
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: Colors.white.withOpacity(0.9),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
                       Container(
                         height: 24,
                         alignment: Alignment.centerLeft,
@@ -763,92 +790,92 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
     );
   }
 
-    Widget _buildImageBubble(Map<String, dynamic> c, bool isSelf) {
-      final avatar = c['avatar']?.toString() ?? '';
-      final nickname = c['nickname']?.toString() ?? '';
-      final rawContent = c['content']?.toString() ?? '';
-      final content = _fullImageUrl(rawContent);
+  Widget _buildImageBubble(Map<String, dynamic> c, bool isSelf) {
+    final avatar = c['avatar']?.toString() ?? '';
+    final nickname = c['nickname']?.toString() ?? '';
+    final rawContent = c['content']?.toString() ?? '';
+    final content = _fullImageUrl(rawContent);
 
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment:
-            isSelf ? MainAxisAlignment.end : MainAxisAlignment.start,
-        children: [
-          if (!isSelf) _avatar(avatar, size: 38),
-          if (!isSelf) const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment:
-                isSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-            children: [
-              Text(nickname,
-                  style: const TextStyle(
-                      fontSize: 11, color: Color(0xFF888888))),
-              const SizedBox(height: 4),
-              GestureDetector(
-                onTap: () => _showImagePreview(content),
-                child: Container(
-                  constraints: const BoxConstraints(maxWidth: 240),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.network(
-                      content,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => Container(
-                        width: 100,
-                        height: 100,
-                        color: Colors.black12,
-                        alignment: Alignment.center,
-                        child: const Icon(Icons.broken_image),
-                      ),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment:
+          isSelf ? MainAxisAlignment.end : MainAxisAlignment.start,
+      children: [
+        if (!isSelf) _avatar(avatar, size: 38),
+        if (!isSelf) const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment:
+              isSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            Text(nickname,
+                style: const TextStyle(
+                    fontSize: 11, color: Color(0xFF888888))),
+            const SizedBox(height: 4),
+            GestureDetector(
+              onTap: () => _showImagePreview(content),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 240),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.network(
+                    content,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => Container(
+                      width: 100,
+                      height: 100,
+                      color: Colors.black12,
+                      alignment: Alignment.center,
+                      child: const Icon(Icons.broken_image),
                     ),
                   ),
                 ),
               ),
-            ],
-          ),
-          if (isSelf) const SizedBox(width: 8),
-          if (isSelf) _avatar(avatar, size: 38),
-        ],
-      );
-    }
+            ),
+          ],
+        ),
+        if (isSelf) const SizedBox(width: 8),
+        if (isSelf) _avatar(avatar, size: 38),
+      ],
+    );
+  }
 
-    void _showImagePreview(String url) {
-      if (url.isEmpty) return;
-      showDialog(
-        context: context,
-        barrierColor: Colors.black.withOpacity(0.9),
-        builder: (ctx) => GestureDetector(
-          onTap: () => Navigator.of(ctx).pop(),
-          child: Dialog(
-            backgroundColor: Colors.transparent,
-            insetPadding: const EdgeInsets.all(8),
-            child: InteractiveViewer(
-              minScale: 0.5,
-              maxScale: 5.0,
-              child: Image.network(
-                url,
-                fit: BoxFit.contain,
-                loadingBuilder: (context, child, progress) {
-                  if (progress == null) return child;
-                  return const Center(
-                    child: SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: CircularProgressIndicator(color: Colors.white),
-                    ),
-                  );
-                },
-                errorBuilder: (_, __, ___) => const Icon(
-                  Icons.broken_image,
-                  color: Colors.white,
-                  size: 80,
-                ),
+  void _showImagePreview(String url) {
+    if (url.isEmpty) return;
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.9),
+      builder: (ctx) => GestureDetector(
+        onTap: () => Navigator.of(ctx).pop(),
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(8),
+          child: InteractiveViewer(
+            minScale: 0.5,
+            maxScale: 5.0,
+            child: Image.network(
+              url,
+              fit: BoxFit.contain,
+              loadingBuilder: (context, child, progress) {
+                if (progress == null) return child;
+                return const Center(
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+                );
+              },
+              errorBuilder: (_, __, ___) => const Icon(
+                Icons.broken_image,
+                color: Colors.white,
+                size: 80,
               ),
             ),
           ),
         ),
-      );
-    }
+      ),
+    );
+  }
 
   Widget _buildTextBubble(Map<String, dynamic> c, bool isSelf) {
     final avatar = c['avatar']?.toString() ?? '';
@@ -934,7 +961,6 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
     );
   }
 
-  // ---- 六合彩红包点击 ----
   Future<void> _onLiuhecaiRedTap(Map<String, dynamic> c) async {
     _inputFocus.unfocus();
     final setid = c['setid']?.toString() ?? '';
@@ -1151,7 +1177,6 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
     }
   }
 
-  // ---- 输入栏 ----
   Widget _buildInputBar() {
     return Container(
       height: 52,
@@ -1246,15 +1271,12 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
 
   Widget _buildFunctionGrid() {
     final items = [
-      _FuncItem('下注', Icons.card_giftcard, const Color(0xFFE94848), _onBet),
-      _FuncItem('看余额', Icons.account_balance_wallet,
-          const Color(0xFF007AFF), _onCheckBalance),
-      _FuncItem('账单', Icons.receipt_long, const Color(0xFF07C160), _onBill),
-      _FuncItem('联系财务', Icons.support_agent, const Color(0xFF07C160),
-          _onFinance),
-      _FuncItem('联系群主', Icons.verified_user, const Color(0xFF007AFF),
-          _onOwner),
-      _FuncItem('照片', Icons.image, const Color(0xFF5AC8FA), _onPhoto),
+      _FuncItem('下注', const _BetCustomIcon(), _onBet),
+      _FuncItem('看余额', _IconWrapper(Icons.account_balance_wallet, const Color(0xFF5AC8FA)), _onCheckBalance),
+      _FuncItem('账单', _IconWrapper(Icons.receipt_long, const Color(0xFF5AC8FA)), _onBill),
+      _FuncItem('联系财务', _IconWrapper(Icons.support_agent, const Color(0xFF5AC8FA)), _onFinance),
+      _FuncItem('联系群主', _IconWrapper(Icons.verified_user, const Color(0xFF5AC8FA)), _onOwner),
+      _FuncItem('照片', _IconWrapper(Icons.image, const Color(0xFF5AC8FA)), _onPhoto),
     ];
 
     return Padding(
@@ -1278,14 +1300,19 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.03),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
                   ),
                   alignment: Alignment.center,
-                  child: Icon(it.icon, size: 30, color: it.color),
+                  child: it.iconWidget,
                 ),
                 const SizedBox(height: 6),
-                Text(it.label,
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF555555))),
+                Text(it.label, style: const TextStyle(fontSize: 12, color: Color(0xFF555555))),
               ],
             ),
           );
@@ -1377,7 +1404,7 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
         return;
       }
       Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ChatRoomPage(fuid: fuid)),
+        CupertinoPageRoute(builder: (_) => ChatRoomPage(fuid: fuid)),
       );
     } else {
       _toast('请前往通讯录查找财务人员');
@@ -1391,7 +1418,7 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
       return;
     }
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ChatRoomPage(fuid: _ownerUid)),
+      CupertinoPageRoute(builder: (_) => ChatRoomPage(fuid: _ownerUid)),
     );
   }
 
@@ -1401,12 +1428,58 @@ class _LiuhecaiRoomPageState extends State<LiuhecaiRoomPage> {
   }
 }
 
+// ================= 图标组件封装 =================
 class _FuncItem {
   final String label;
+  final Widget iconWidget;
+  final VoidCallback onTap;
+  _FuncItem(this.label, this.iconWidget, this.onTap);
+}
+
+// 默认图标包装器
+class _IconWrapper extends StatelessWidget {
   final IconData icon;
   final Color color;
-  final VoidCallback onTap;
-  _FuncItem(this.label, this.icon, this.color, this.onTap);
+  const _IconWrapper(this.icon, this.color, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Icon(icon, size: 28, color: color);
+  }
+}
+
+// ★★★ 统一为浅蓝色系的下注图标 ★★★
+class _BetCustomIcon extends StatelessWidget {
+  const _BetCustomIcon({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF8EE0FF), Color(0xFF5AC8FA)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF5AC8FA).withOpacity(0.3),
+            blurRadius: 6,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: const Icon(
+        Icons.casino,
+        color: Colors.white,
+        size: 24,
+      ),
+    );
+  }
 }
 
 // ================= 简易跑马灯 =================

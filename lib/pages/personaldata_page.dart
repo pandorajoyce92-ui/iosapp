@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import '../core/config.dart';
 import '../core/theme.dart';
@@ -30,6 +29,7 @@ class _PersonalDataPageState extends State<PersonalDataPage> {
   String _avatarUrl = '';
   String _mobile = '';
   String _nickname = '';
+  String _qrcodeBase64 = ''; // ★ 后端下发
 
   final _nicknameCtrl = TextEditingController();
   final _realnameCtrl = TextEditingController();
@@ -75,6 +75,7 @@ class _PersonalDataPageState extends State<PersonalDataPage> {
             _avatarUrl = avatar;
             _mobile = r['mobile']?.toString() ?? '';
             _nickname = r['nickname']?.toString() ?? '';
+            _qrcodeBase64 = r['qrcode_base64']?.toString() ?? ''; // ★
             _nicknameCtrl.text = _nickname;
             _realnameCtrl.text = r['realname']?.toString() ?? '';
             _loading = false;
@@ -202,6 +203,7 @@ class _PersonalDataPageState extends State<PersonalDataPage> {
         nickname: _nicknameCtrl.text.trim(),
         avatarUrl: _avatarUrl,
         mobile: _mobile,
+        qrcodeBase64: _qrcodeBase64, // ★
       ),
     );
   }
@@ -471,12 +473,14 @@ class _QrCardDialog extends StatelessWidget {
   final String nickname;
   final String avatarUrl;
   final String mobile;
+  final String qrcodeBase64; // ★
 
   const _QrCardDialog({
     required this.uid,
     required this.nickname,
     required this.avatarUrl,
     required this.mobile,
+    required this.qrcodeBase64,
   });
 
   @override
@@ -560,13 +564,15 @@ class _QrCardDialog extends StatelessWidget {
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: QrImageView(
-                data: 'https://www.guluapp.cn/cpPa',
-                version: QrVersions.auto,
-                size: 200,
-                backgroundColor: Colors.white,
-                errorCorrectionLevel: QrErrorCorrectLevel.H,
-              ),
+              // ★ 用后端下发的 base64 显示二维码
+              child: qrcodeBase64.isNotEmpty
+                  ? Image.memory(
+                      base64Decode(qrcodeBase64.contains(',')
+                          ? qrcodeBase64.split(',').last
+                          : qrcodeBase64),
+                      fit: BoxFit.contain,
+                    )
+                  : const Center(child: CircularProgressIndicator()),
             ),
             const SizedBox(height: 20),
             GestureDetector(
@@ -594,6 +600,7 @@ class _QrCardDialog extends StatelessWidget {
         uid: uid,
         nickname: nickname,
         avatarUrl: avatarUrl,
+        qrcodeBase64: qrcodeBase64, // ★
       );
       if (!context.mounted) return;
       Navigator.of(context).pop();
@@ -615,6 +622,7 @@ class _QrCardDialog extends StatelessWidget {
     required int uid,
     required String nickname,
     required String avatarUrl,
+    required String qrcodeBase64,
   }) async {
     const width = 600.0;
     const height = 800.0;
@@ -648,18 +656,18 @@ class _QrCardDialog extends StatelessWidget {
     const qrX = (width - qrSize) / 2;
     const qrY = 180.0;
 
-    final qrPainter = QrPainter(
-      data: 'https://www.guluapp.cn/cpPa',
-      version: QrVersions.auto,
-      gapless: true,
-      color: Colors.black,
-      emptyColor: Colors.white,
-      errorCorrectionLevel: QrErrorCorrectLevel.H,
-    );
-    final qrImgData = await qrPainter.toImageData(qrSize, format: ui.ImageByteFormat.png);
-    if (qrImgData != null) {
-      final qrImg = await decodeImageFromList(qrImgData.buffer.asUint8List());
-      canvas.drawImage(qrImg, const Offset(qrX, qrY), Paint());
+    // ★ 用后端下发的 base64 绘制二维码
+    if (qrcodeBase64.isNotEmpty) {
+      final pure = qrcodeBase64.contains(',')
+          ? qrcodeBase64.split(',').last
+          : qrcodeBase64;
+      final qrImg = await decodeImageFromList(base64Decode(pure));
+      canvas.drawImageRect(
+        qrImg,
+        Rect.fromLTWH(0, 0, qrImg.width.toDouble(), qrImg.height.toDouble()),
+        const Rect.fromLTWH(qrX, qrY, qrSize, qrSize),
+        Paint()..filterQuality = FilterQuality.high,
+      );
     }
 
     const avatarSize = 100.0;
@@ -762,7 +770,6 @@ class _PosterPreviewDialog extends StatelessWidget {
   const _PosterPreviewDialog({required this.bytes});
 
   Future<void> _save(BuildContext context) async {
-    // ★ 提前抓取 messenger 和 navigator，因为 pop 后 context 会失效
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
 
@@ -774,7 +781,6 @@ class _PosterPreviewDialog extends StatelessWidget {
         name: 'jianxin_poster_${DateTime.now().millisecondsSinceEpoch}',
       );
 
-      // ★ 保存成功后：先关弹窗，再弹提示
       navigator.pop();
       messenger.showSnackBar(
         const SnackBar(
@@ -784,7 +790,6 @@ class _PosterPreviewDialog extends StatelessWidget {
       );
     } catch (e) {
       debugPrint('❌ 保存失败: $e');
-      // ★ 保存失败：不关弹窗，让用户重试
       messenger.showSnackBar(
         SnackBar(content: Text('保存失败：$e')),
       );
@@ -799,7 +804,6 @@ class _PosterPreviewDialog extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ★ 文案改为"点击保存到相册"
           const Text(
             '点击保存到相册',
             style: TextStyle(color: Colors.white, fontSize: 16),

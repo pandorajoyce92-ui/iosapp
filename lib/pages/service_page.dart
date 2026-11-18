@@ -7,7 +7,6 @@ import 'package:flutter/cupertino.dart' show CupertinoIcons, CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
 import '../core/config.dart';
@@ -16,7 +15,6 @@ import '../core/http_client.dart';
 import '../models/user_info.dart';
 import 'chat_room_page.dart';
 import 'under_page.dart';
-import 'servant_page.dart';
 
 class ServicePage extends StatefulWidget {
   const ServicePage({super.key});
@@ -27,6 +25,7 @@ class ServicePage extends StatefulWidget {
 
 class _ServicePageState extends State<ServicePage> {
   UserInfo? _user;
+  String _qrcodeBase64 = ''; // ★ 后端下发的二维码 base64
   bool _loading = true;
 
   static const LinearGradient _bgGradient = LinearGradient(
@@ -38,7 +37,6 @@ class _ServicePageState extends State<ServicePage> {
 
   static const Color _itemBg = Color(0x26FFFFFF);
 
-  // ★ 平台客服 UID（所有玩家注册时自动添加为好友）
   static const int _platformServiceUid = 624878;
 
   @override
@@ -58,10 +56,12 @@ class _ServicePageState extends State<ServicePage> {
         try { data = jsonDecode(data); } catch (_) {}
       }
       if (data is Map && data['status'] == 1 && data['result'] is Map) {
-        final user = UserInfo.fromJson(Map<String, dynamic>.from(data['result']));
+        final r = Map<String, dynamic>.from(data['result']);
+        final user = UserInfo.fromJson(r);
         if (mounted) {
           setState(() {
             _user = user;
+            _qrcodeBase64 = r['qrcode_base64']?.toString() ?? ''; // ★
             _loading = false;
           });
         }
@@ -90,7 +90,7 @@ class _ServicePageState extends State<ServicePage> {
     showDialog(
       context: context,
       barrierColor: Colors.black.withOpacity(0.88),
-      builder: (_) => _PosterDialog(user: user),
+      builder: (_) => _PosterDialog(user: user, qrcodeBase64: _qrcodeBase64),
     );
   }
 
@@ -243,7 +243,8 @@ class _ServicePageState extends State<ServicePage> {
 // ====================================================================
 class _PosterDialog extends StatefulWidget {
   final UserInfo user;
-  const _PosterDialog({required this.user});
+  final String qrcodeBase64; // ★ 后端下发
+  const _PosterDialog({required this.user, required this.qrcodeBase64});
 
   @override
   State<_PosterDialog> createState() => _PosterDialogState();
@@ -257,7 +258,7 @@ class _PosterDialogState extends State<_PosterDialog> {
   @override
   void initState() {
     super.initState();
-    // 确认这里已经删除了 _generate();
+    // 保持原逻辑：不自动生成，秒开显示后端二维码
   }
 
   Future<void> _generate() async {
@@ -271,6 +272,7 @@ class _PosterDialogState extends State<_PosterDialog> {
         uid: widget.user.id,
         nickname: widget.user.nickname,
         avatarUrl: widget.user.avatarUrl,
+        qrcodeBase64: widget.qrcodeBase64,
       );
       if (mounted) {
         setState(() {
@@ -293,6 +295,7 @@ class _PosterDialogState extends State<_PosterDialog> {
     required int uid,
     required String nickname,
     required String avatarUrl,
+    required String qrcodeBase64,
   }) async {
     const width = 600.0;
     const height = 800.0;
@@ -328,19 +331,18 @@ class _PosterDialogState extends State<_PosterDialog> {
     const qrX = (width - qrSize) / 2;
     const qrY = 180.0;
 
-    final qrPainter = QrPainter(
-      data: 'https://www.guluapp.cn/cpPa',
-      version: QrVersions.auto,
-      gapless: true,
-      color: Colors.black,
-      emptyColor: Colors.white,
-      errorCorrectionLevel: QrErrorCorrectLevel.H,
-    );
-
-    final qrImgData = await qrPainter.toImageData(qrSize, format: ui.ImageByteFormat.png);
-    if (qrImgData != null) {
-      final qrImg = await decodeImageFromList(qrImgData.buffer.asUint8List());
-      canvas.drawImage(qrImg, const Offset(qrX, qrY), Paint());
+    // ★ 用后端下发的 base64 绘制二维码
+    if (qrcodeBase64.isNotEmpty) {
+      final pure = qrcodeBase64.contains(',')
+          ? qrcodeBase64.split(',').last
+          : qrcodeBase64;
+      final qrImg = await decodeImageFromList(base64Decode(pure));
+      canvas.drawImageRect(
+        qrImg,
+        Rect.fromLTWH(0, 0, qrImg.width.toDouble(), qrImg.height.toDouble()),
+        const Rect.fromLTWH(qrX, qrY, qrSize, qrSize),
+        Paint()..filterQuality = FilterQuality.high,
+      );
     }
 
     const avatarSize = 100.0;
@@ -498,7 +500,6 @@ class _PosterDialogState extends State<_PosterDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 1. 顶部关闭按钮
             SizedBox(
               height: 48,
               child: Row(
@@ -515,8 +516,6 @@ class _PosterDialogState extends State<_PosterDialog> {
                 ],
               ),
             ),
-
-            // 2. 用户信息卡片区
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Row(
@@ -526,16 +525,16 @@ class _PosterDialogState extends State<_PosterDialog> {
                     child: Container(
                       width: 56, height: 56,
                       color: const Color(0xFFF0ECFF),
-                                            child: widget.user.avatarUrl.isEmpty
-                                                ? const Icon(Icons.person, color: Colors.deepPurple, size: 28)
-                                                : CachedNetworkImage(
-                                                    imageUrl: widget.user.avatarUrl,
-                                                    width: 56, height: 56, fit: BoxFit.cover,
-                                                    placeholder: (context, url) =>
-                                                        const Icon(Icons.person, color: Colors.deepPurple, size: 28),
-                                                    errorWidget: (context, url, error) =>
-                                                        const Icon(Icons.person, color: Colors.deepPurple, size: 28),
-                                                  ),
+                      child: widget.user.avatarUrl.isEmpty
+                          ? const Icon(Icons.person, color: Colors.deepPurple, size: 28)
+                          : CachedNetworkImage(
+                              imageUrl: widget.user.avatarUrl,
+                              width: 56, height: 56, fit: BoxFit.cover,
+                              placeholder: (context, url) =>
+                                  const Icon(Icons.person, color: Colors.deepPurple, size: 28),
+                              errorWidget: (context, url, error) =>
+                                  const Icon(Icons.person, color: Colors.deepPurple, size: 28),
+                            ),
                     ),
                   ),
                   const SizedBox(width: 16),
@@ -560,8 +559,6 @@ class _PosterDialogState extends State<_PosterDialog> {
               ),
             ),
             const SizedBox(height: 20),
-
-            // 3. 中间二维码内容区
             Container(
               width: 200, height: 200,
               decoration: BoxDecoration(
@@ -571,8 +568,6 @@ class _PosterDialogState extends State<_PosterDialog> {
               child: _buildContent(),
             ),
             const SizedBox(height: 20),
-
-            // 4. 底部保存按钮
             GestureDetector(
               onTap: _save,
               child: Container(
@@ -623,13 +618,13 @@ class _PosterDialogState extends State<_PosterDialog> {
       return Image.memory(_posterBytes!, fit: BoxFit.contain);
     }
 
-    // 秒开状态：显示纯净的二维码
-    return QrImageView(
-      data: 'https://www.guluapp.cn/cpPa',
-      version: QrVersions.auto,
-      size: 200,
-      backgroundColor: Colors.white,
-      errorCorrectionLevel: QrErrorCorrectLevel.H,
-    );
+    // ★ 秒开状态：显示后端下发的二维码
+    if (widget.qrcodeBase64.isNotEmpty) {
+      final pure = widget.qrcodeBase64.contains(',')
+          ? widget.qrcodeBase64.split(',').last
+          : widget.qrcodeBase64;
+      return Image.memory(base64Decode(pure), fit: BoxFit.contain);
+    }
+    return const Center(child: CircularProgressIndicator());
   }
 }

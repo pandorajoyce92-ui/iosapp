@@ -38,7 +38,8 @@ class RedPacketRoomPage extends StatefulWidget {
   State<RedPacketRoomPage> createState() => _RedPacketRoomPageState();
 }
 
-class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
+class _RedPacketRoomPageState extends State<RedPacketRoomPage> with WidgetsBindingObserver { // ★★★ 新增 with WidgetsBindingObserver
+
   String _announcement = '';
   int _myUid = 0;
   int _ownerUid = 0;
@@ -55,7 +56,7 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
   bool _hasText = false;
   final FocusNode _inputFocus = FocusNode();
 
-  bool _loading = false; // 初始不显示全屏 loading
+  bool _loading = false;
   final ScrollController _scrollCtrl = ScrollController();
   bool _isAtBottom = true;
 
@@ -68,13 +69,11 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this); // ★★★ 新增：添加生命周期监听
     _scrollCtrl.addListener(_onScroll);
     _inputFocus.addListener(_onInputFocusChanged);
 
-    // 1. 优先读取本地缓存，瞬间渲染（0延迟，无转圈）
     _loadCacheFirst();
-
-    // 2. 随后静默拉取最新数据和建立连接
     _loadInitial();
     _connectSocket();
 
@@ -83,6 +82,34 @@ class _RedPacketRoomPageState extends State<RedPacketRoomPage> {
       (_) => _pollRedPacketStatus(),
     );
   }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this); // ★★★ 新增：移除生命周期监听
+    _inputCtrl.dispose();
+    _scrollCtrl.dispose();
+    _inputFocus.dispose();
+    _statusTimer?.cancel();
+    _socket?.dispose();
+    _cacheWriteTimer?.cancel();
+    super.dispose();
+  }
+
+  // ★★★ 新增：APP 回到前台时的处理逻辑
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('🔄 红包房间回到前台，重连 Socket 并刷新数据');
+      if (_socket != null) {
+        _socket!.connect(); // 红包房间的 socket 是复用的，直接 connect 即可
+      } else {
+        _connectSocket();
+      }
+      _loadInitial();
+    }
+  }
+  // ★★★ 新增结束
 
   void _loadCacheFirst() {
     final cached = DataCache.get('rp_room_${widget.roomid}');

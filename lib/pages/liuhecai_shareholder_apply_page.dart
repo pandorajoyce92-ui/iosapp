@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
-import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../core/app_cache_manager.dart';
 
 import '../core/config.dart';
 import '../core/http_client.dart';
@@ -12,20 +14,21 @@ class LiuhecaiShareholderApplyPage extends StatefulWidget {
   const LiuhecaiShareholderApplyPage({super.key, required this.roomid});
 
   @override
-  State<LiuhecaiShareholderApplyPage> createState() =>
-      _LiuhecaiShareholderApplyPageState();
+  State<LiuhecaiShareholderApplyPage> createState() => _LiuhecaiShareholderApplyPageState();
 }
 
-class _LiuhecaiShareholderApplyPageState
-    extends State<LiuhecaiShareholderApplyPage> {
-  bool _loading = true;
+class _LiuhecaiShareholderApplyPageState extends State<LiuhecaiShareholderApplyPage> {
+  bool _loading = false;
 
   bool _isOwner = false;
   bool _isShareholder = false;
   bool _isAgent = false;
+  int _myAgentLevel = -1;
+  int _myUid = 0;
   double _myRatio = 0;
+  int _ownerUid = 0;
 
-  List<Map<String, dynamic>> _members = [];
+  List<_Member> _members = [];
 
   static const LinearGradient _bgGradient = LinearGradient(
     begin: Alignment.topCenter,
@@ -35,7 +38,6 @@ class _LiuhecaiShareholderApplyPageState
   );
 
   static const Color _cardBg = Color(0xF2FFFFFF);
-  static const Color _borderColor = Color(0xFFD0E4FF);
 
   @override
   void initState() {
@@ -56,7 +58,7 @@ class _LiuhecaiShareholderApplyPageState
       if (data is Map && data['status'] == 1 && data['result'] is Map) {
         final r = Map<String, dynamic>.from(data['result']);
         final list = (r['members'] as List? ?? [])
-            .map((e) => Map<String, dynamic>.from(e))
+            .map((e) => _Member.fromJson(Map<String, dynamic>.from(e)))
             .toList();
 
         if (mounted) {
@@ -64,7 +66,10 @@ class _LiuhecaiShareholderApplyPageState
             _isOwner = _truthy(r['is_owner']);
             _isShareholder = _truthy(r['is_shareholder']);
             _isAgent = _truthy(r['is_agent']);
+            _myAgentLevel = int.tryParse(r['my_agent_level']?.toString() ?? '-1') ?? -1;
+            _myUid = int.tryParse(r['my_uid']?.toString() ?? '0') ?? 0;
             _myRatio = _toDouble(r['my_ratio']);
+            _ownerUid = int.tryParse(r['owner_uid']?.toString() ?? '0') ?? 0;
             _members = list;
             _loading = false;
           });
@@ -98,90 +103,68 @@ class _LiuhecaiShareholderApplyPageState
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        duration: const Duration(milliseconds: 2000),
-      ),
+      SnackBar(content: Text(msg), duration: const Duration(milliseconds: 2000)),
     );
   }
 
-  String _fmtRatio(double v) {
-    if (v == v.roundToDouble()) return v.toInt().toString();
-    return v.toString();
+  List<String> _getAvailableOptions(int targetLevel) {
+    final my = _myAgentLevel;
+    final opts = <String>[];
+
+    if (my == 99) {
+      opts.add('cancel');
+      opts.add('shareholder');
+      opts.add('agent_1');
+      opts.add('player_rebate');
+    } else if (my == 0) {
+      if (targetLevel == -1) {
+        opts.add('agent_1');
+        opts.add('player_rebate');
+      } else if (targetLevel == 1) {
+        opts.add('cancel');
+        opts.add('player_rebate');
+      }
+    } else if (my == 1) {
+      if (targetLevel == -1) {
+        opts.add('agent_2');
+        opts.add('player_rebate');
+      } else if (targetLevel == 2) {
+        opts.add('cancel');
+        opts.add('player_rebate');
+      }
+    } else if (my == 2) {
+      if (targetLevel == -1) {
+        opts.add('agent_3');
+        opts.add('player_rebate');
+      } else if (targetLevel == 3) {
+        opts.add('cancel');
+        opts.add('player_rebate');
+      }
+    } else if (my == 3) {
+      if (targetLevel == -1) {
+        opts.add('player_rebate');
+      }
+    }
+    return opts;
   }
 
-  Future<void> _openSetRole(Map<String, dynamic> m) async {
-    final ok = await showModalBottomSheet<bool>(
+  Future<void> _openSetRole(_Member m) async {
+    final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withOpacity(0.55),
-      builder: (_) => _SetRoleSheet(
+      builder: (_) => _RoleSheet(
         roomid: widget.roomid,
         target: m,
-        isOwner: _isOwner,
-        isShareholder: _isShareholder,
+        myAgentLevel: _myAgentLevel,
+        myRatio: _myRatio,
+        availableOptions: _getAvailableOptions(m.agentLevel),
       ),
     );
-    if (ok == true && mounted) _load();
-  }
-
-  Future<void> _openRebate(Map<String, dynamic> m) async {
-    final playerUid = _toInt(m['id']);
-    if (playerUid <= 0) return;
-
-    try {
-      final res = await HttpClient.instance.dio.get(
-        '${ApiConfig.liuhecaiShareholderApply}&op=get_rebate&roomid=${widget.roomid}&player_uid=$playerUid',
-        options: Options(responseType: ResponseType.plain),
-      );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
-      }
-      if (data is Map && data['status'] == 1 && data['result'] is Map) {
-        final r = Map<String, dynamic>.from(data['result']);
-        if (!mounted) return;
-        final ok = await showModalBottomSheet<bool>(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          barrierColor: Colors.black.withOpacity(0.55),
-          builder: (_) => _RebateSheet(
-            roomid: widget.roomid,
-            playerUid: playerUid,
-            playerNickname:
-                r['player_nickname']?.toString() ?? m['nickname']?.toString() ?? '',
-            agentRatio: _toDouble(r['agent_ratio']),
-            currentRebate: _toDouble(r['rebate_ratio']),
-          ),
-        );
-        if (ok == true && mounted) _load();
-      } else {
-        _toast(data is Map
-            ? (data['result']?.toString() ?? '加载失败')
-            : '加载失败');
-      }
-    } catch (e) {
-      debugPrint('❌ [liuhecai_shareholder_apply get_rebate] $e');
-      _toast('网络错误');
+    if (result == true && mounted) {
+      _load();
     }
-  }
-
-  int _toInt(dynamic v) {
-    if (v == null) return 0;
-    if (v is int) return v;
-    if (v is num) return v.toInt();
-    return int.tryParse(v.toString()) ?? 0;
-  }
-
-  String _fullAvatarUrl(String raw) {
-    if (raw.isEmpty) return '';
-    if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
-    if (raw.startsWith('../')) {
-      return '${ApiConfig.baseUrl}/${raw.replaceFirst('../', '')}';
-    }
-    return '${ApiConfig.baseUrl}/${raw.replaceFirst(RegExp(r'^/+'), '')}';
   }
 
   @override
@@ -199,12 +182,8 @@ class _LiuhecaiShareholderApplyPageState
           body: Column(
             children: [
               SizedBox(height: MediaQuery.of(context).padding.top),
-              _buildHeader(),
-              Expanded(
-                child: _loading
-                    ? const Center(child: CircularProgressIndicator())
-                    : _buildBody(),
-              ),
+              _buildTopBar(),
+              Expanded(child: _buildBody()),
             ],
           ),
         ),
@@ -212,34 +191,28 @@ class _LiuhecaiShareholderApplyPageState
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildTopBar() {
     return Container(
       height: 44,
       color: Colors.transparent,
       child: Stack(
         children: [
           Positioned(
-            left: 8,
-            top: 0,
-            bottom: 0,
+            left: 0, top: 0, bottom: 0,
             child: GestureDetector(
               onTap: () => Navigator.of(context).pop(),
-              child: const SizedBox(
-                width: 40,
-                height: 44,
-                child: Icon(CupertinoIcons.back, color: Colors.black, size: 22),
+              behavior: HitTestBehavior.opaque,
+              child: Container(
+                width: 50, height: 44,
+                alignment: Alignment.center,
+                child: const Icon(CupertinoIcons.back, color: Colors.black, size: 24),
               ),
             ),
           ),
           const Center(
             child: Text(
               '股东与代理',
-              style: TextStyle(
-                color: Color(0xFF000000),
-                fontSize: 17,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.5,
-              ),
+              style: TextStyle(color: Color(0xFF000000), fontSize: 17, fontWeight: FontWeight.w600),
             ),
           ),
         ],
@@ -253,16 +226,11 @@ class _LiuhecaiShareholderApplyPageState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (_isAgent) _buildRatioBox(),
+          _buildMyPanel(),
           if (_members.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 40),
-              child: Center(
-                child: Text(
-                  '暂无成员',
-                  style: TextStyle(fontSize: 14, color: Color(0xFF999999)),
-                ),
-              ),
+              child: Center(child: Text('暂无成员', style: TextStyle(fontSize: 14, color: Color(0xFF999999)))),
             )
           else
             ..._members.map(_buildMemberItem),
@@ -271,68 +239,93 @@ class _LiuhecaiShareholderApplyPageState
     );
   }
 
-  Widget _buildRatioBox() {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text.rich(
-        TextSpan(
-          style: const TextStyle(
-            fontSize: 14,
-            color: Color(0xFF007AFF),
-            fontWeight: FontWeight.w600,
-            height: 1.6,
-          ),
-          children: [
-            const TextSpan(text: '当前佣金比例：'),
-            TextSpan(text: '${_fmtRatio(_myRatio)}%'),
-          ],
+  Widget _buildMyPanel() {
+    final lvl = _myAgentLevel;
+
+    if (lvl == 99 || lvl == 0) {
+      final tip = lvl == 99
+          ? '你是群主，可设置股东、一级代理，也可以给玩家设返点。'
+          : '你是股东（分红 ${_fmtRatio(_myRatio)}%），可设置一级代理，也可以给玩家设返点。';
+      return Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: _cardBg,
+          borderRadius: BorderRadius.circular(12),
+          border: const Border(left: BorderSide(color: Color(0xFF007AFF), width: 4)),
         ),
-      ),
-    );
+        child: Text(tip, style: const TextStyle(fontSize: 13, color: Color(0xFF555555), height: 1.8)),
+      );
+    }
+
+    if (lvl == 1 || lvl == 2 || lvl == 3) {
+      final lvlText = lvl == 1 ? '一级代理' : (lvl == 2 ? '二级代理' : '三级代理');
+      final tip = lvl == 3
+          ? '你是三级代理，不能设下级代理，只能给玩家设返点。'
+          : (lvl == 1
+              ? '你可以设置二级代理，也可以给玩家设返点。下级点位不能超过你自己的返点。'
+              : '你可以设置三级代理，也可以给玩家设返点。下级点位不能超过你自己的返点。');
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFFE6F2FF), Color(0xFFD9F0E7)],
+                begin: Alignment.topLeft, end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('我的身份：$lvlText', style: const TextStyle(fontSize: 14, color: Color(0xFF007AFF), fontWeight: FontWeight.w600, height: 1.8)),
+                Text('下注流水返点：${_fmtRatio(_myRatio)}%', style: const TextStyle(fontSize: 14, color: Color(0xFF007AFF), fontWeight: FontWeight.w600, height: 1.8)),
+              ],
+            ),
+          ),
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: _cardBg,
+              borderRadius: BorderRadius.circular(12),
+              border: const Border(left: BorderSide(color: Color(0xFF007AFF), width: 4)),
+            ),
+            child: Text(tip, style: const TextStyle(fontSize: 13, color: Color(0xFF555555), height: 1.8)),
+          ),
+        ],
+      );
+    }
+
+    return const SizedBox.shrink();
   }
 
-  Widget _buildMemberItem(Map<String, dynamic> m) {
-    final avatar = _fullAvatarUrl(m['avatar']?.toString() ?? '');
-    final nickname = m['nickname']?.toString() ?? '';
-    final roleType = _toInt(m['role_type']);
-    final todayBet = _toDouble(m['today_bet']);
-    final myRebate = _toDouble(m['my_rebate']);
-
-    final canSet = _isOwner || _isShareholder;
-    final canRebate = _isAgent && roleType == 0;
+  Widget _buildMemberItem(_Member m) {
+    final opts = m.isOwner || m.id == _myUid ? <String>[] : _getAvailableOptions(m.agentLevel);
+    final canSet = opts.isNotEmpty;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(12),
-      ),
+      decoration: BoxDecoration(color: _cardBg, borderRadius: BorderRadius.circular(12)),
       child: Row(
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(10),
             child: Container(
-              width: 44,
-              height: 44,
+              width: 44, height: 44,
               color: const Color(0xFFE6F2FF),
-              child: avatar.isEmpty
+              child: m.avatarUrl.isEmpty
                   ? const Icon(Icons.person, color: Color(0xFF007AFF), size: 22)
-                  : Image.network(
-                      avatar,
-                      width: 44,
-                      height: 44,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const Icon(
-                        Icons.person,
-                        color: Color(0xFF007AFF),
-                        size: 22,
-                      ),
+                  : Image(
+                      image: CachedNetworkImageProvider(m.avatarUrl, cacheManager: AppCacheManager.instance),
+                      width: 44, height: 44, fit: BoxFit.cover,
+                      frameBuilder: (_, child, __, ___) => child,
+                      loadingBuilder: (_, child, progress) => progress == null ? child : const Icon(Icons.person, color: Color(0xFF007AFF), size: 22),
+                      errorBuilder: (_, __, ___) => const Icon(Icons.person, color: Color(0xFF007AFF), size: 22),
                     ),
             ),
           ),
@@ -344,388 +337,159 @@ class _LiuhecaiShareholderApplyPageState
                 Row(
                   children: [
                     Flexible(
-                      child: Text(
-                        nickname,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF222222),
-                        ),
-                      ),
+                      child: Text(m.nickname, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF222222))),
                     ),
-                    if (roleType == 1) ...[
+                    if (_buildRoleTag(m) != null) ...[
                       const SizedBox(width: 6),
-                      _roleTag('股东', const Color(0xFF8B5CF6)),
-                    ] else if (roleType == 2) ...[
-                      const SizedBox(width: 6),
-                      _roleTag('代理', const Color(0xFFF59E0B)),
+                      _buildRoleTag(m)!,
                     ],
                   ],
                 ),
-                if (_isOwner)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      '今日下注：${todayBet.toStringAsFixed(2)} 元',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF999999),
-                      ),
-                    ),
-                  ),
+                if (_ratioHint(m).isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(_ratioHint(m), style: const TextStyle(fontSize: 11, color: Color(0xFF999999))),
+                ],
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (canSet)
-                GestureDetector(
-                  onTap: () => _openSetRole(m),
-                  child: _actionBtn('设置', const Color(0xFF007AFF)),
-                ),
-              if (canSet && canRebate) const SizedBox(width: 6),
-              if (canRebate)
-                GestureDetector(
-                  onTap: () => _openRebate(m),
-                  child: _actionBtn(
-                    myRebate > 0 ? '返点 (${_fmtRatio(myRebate)}%)' : '返点',
-                    const Color(0xFFF59E0B),
-                  ),
-                ),
-            ],
-          ),
+          if (canSet)
+            GestureDetector(
+              onTap: () => _openSetRole(m),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(color: const Color(0xFF007AFF), borderRadius: BorderRadius.circular(8)),
+                child: const Text('设置', style: TextStyle(fontSize: 13, color: Colors.white, fontWeight: FontWeight.w500)),
+              ),
+            ),
         ],
       ),
     );
   }
 
-  Widget _roleTag(String label, Color bg) {
+  Widget? _buildRoleTag(_Member m) {
+    if (m.isOwner) return _tag('群主', const Color(0xFFE94848));
+    if (m.agentLevel == 0) return _tag('股东', const Color(0xFF8B5CF6));
+    if (m.agentLevel == 1) return _tag('一级代理', const Color(0xFF3B82F6));
+    if (m.agentLevel == 2) return _tag('二级代理', const Color(0xFF06B6D4));
+    if (m.agentLevel == 3) return _tag('三级代理', const Color(0xFF10B981));
+    return null;
+  }
+
+  Widget _tag(String label, Color bg) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 10,
-          color: Colors.white,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8)),
+      child: Text(label, style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w500)),
     );
   }
 
-  Widget _actionBtn(String label, Color bg) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 13,
-          color: Colors.white,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-    );
+  String _ratioHint(_Member m) {
+    if (m.isOwner) return '';
+    if (m.agentLevel >= 0 && m.ratio > 0) {
+      return '返点/分红 ${_fmtRatio(m.ratio)}%';
+    }
+    if (m.agentLevel == -1 && m.ratio > 0) {
+      return '玩家返点 ${_fmtRatio(m.ratio)}%';
+    }
+    return '';
+  }
+
+  String _fmtRatio(double v) {
+    if (v == v.roundToDouble()) return v.toInt().toString();
+    return v.toString();
   }
 }
 
-// ==================== 设置角色弹窗 ====================
-class _SetRoleSheet extends StatefulWidget {
-  final int roomid;
-  final Map<String, dynamic> target;
+// ================= 成员模型 =================
+class _Member {
+  final int id;
+  final String nickname;
+  final String avatar;
+  final int roleType;
+  final int agentLevel;
+  final double ratio;
   final bool isOwner;
-  final bool isShareholder;
 
-  const _SetRoleSheet({
+  _Member({
+    required this.id,
+    required this.nickname,
+    required this.avatar,
+    required this.roleType,
+    required this.agentLevel,
+    required this.ratio,
+    required this.isOwner,
+  });
+
+  factory _Member.fromJson(Map<String, dynamic> j) {
+    return _Member(
+      id: int.tryParse(j['id']?.toString() ?? '0') ?? 0,
+      nickname: j['nickname']?.toString() ?? '',
+      avatar: j['avatar']?.toString() ?? '',
+      roleType: int.tryParse(j['role_type']?.toString() ?? '0') ?? 0,
+      agentLevel: int.tryParse(j['agent_level']?.toString() ?? '-1') ?? -1,
+      ratio: _d(j['ratio']),
+      isOwner: (j['is_owner']?.toString() == '1'),
+    );
+  }
+
+  static double _d(dynamic v) {
+    if (v == null) return 0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0;
+  }
+
+  String get avatarUrl {
+    if (avatar.isEmpty) return '';
+    if (avatar.startsWith('http://') || avatar.startsWith('https://')) return avatar;
+    if (avatar.startsWith('../')) return 'https://jianxinchat.top/${avatar.replaceFirst('../', '')}';
+    return 'https://jianxinchat.top/${avatar.replaceFirst(RegExp(r'^/+'), '')}';
+  }
+}
+
+// ================= 设置角色弹窗 =================
+class _RoleSheet extends StatefulWidget {
+  final int roomid;
+  final _Member target;
+  final int myAgentLevel;
+  final double myRatio;
+  final List<String> availableOptions;
+
+  const _RoleSheet({
     required this.roomid,
     required this.target,
-    required this.isOwner,
-    required this.isShareholder,
+    required this.myAgentLevel,
+    required this.myRatio,
+    required this.availableOptions,
   });
 
   @override
-  State<_SetRoleSheet> createState() => _SetRoleSheetState();
+  State<_RoleSheet> createState() => _RoleSheetState();
 }
 
-class _SetRoleSheetState extends State<_SetRoleSheet> {
-  late int _roleType;
-  final _ratioCtrl = TextEditingController(text: '0.0');
+class _RoleSheetState extends State<_RoleSheet> {
+  late String _selectedOpt;
+  final _ratioCtrl = TextEditingController();
   bool _saving = false;
+
+  static const _optLabels = <String, String>{
+    'cancel': '取消身份',
+    'shareholder': '设为股东',
+    'agent_1': '设为一级代理',
+    'agent_2': '设为二级代理',
+    'agent_3': '设为三级代理',
+    'player_rebate': '设置玩家返点',
+  };
 
   @override
   void initState() {
     super.initState();
-    _roleType = int.tryParse(widget.target['role_type']?.toString() ?? '0') ?? 0;
+    _selectedOpt = widget.availableOptions.isNotEmpty ? widget.availableOptions.first : 'cancel';
+    _ratioCtrl.text = _fmt(widget.target.ratio);
   }
 
   @override
   void dispose() {
     _ratioCtrl.dispose();
-    super.dispose();
-  }
-
-  void _toast(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        duration: const Duration(milliseconds: 2000),
-      ),
-    );
-  }
-
-  Future<void> _save() async {
-    if (_saving) return;
-
-    final ratio = double.tryParse(_ratioCtrl.text.trim()) ?? 0;
-    if (_roleType != 0 && (ratio < 0)) {
-      _toast('请输入有效比例');
-      return;
-    }
-
-    setState(() => _saving = true);
-    try {
-      final res = await HttpClient.instance.dio.post(
-        '${ApiConfig.liuhecaiShareholderApply}&op=set_role&roomid=${widget.roomid}',
-        data: {
-          'op': 'set_role',
-          'roomid': widget.roomid,
-          'uid': widget.target['id'],
-          'role_type': _roleType,
-          'ratio': ratio,
-        },
-        options: Options(
-          contentType: Headers.formUrlEncodedContentType,
-          responseType: ResponseType.plain,
-        ),
-      );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
-      }
-      if (data is Map && data['status']?.toString() == '1') {
-        _toast(data['result']?.toString() ?? '保存成功');
-        await Future.delayed(const Duration(milliseconds: 300));
-        if (mounted) Navigator.of(context).pop(true);
-      } else {
-        _toast(data is Map
-            ? (data['result']?.toString() ?? '保存失败')
-            : '保存失败');
-      }
-    } catch (e) {
-      debugPrint('❌ [set_role] $e');
-      _toast('网络错误');
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-    return Container(
-      padding: EdgeInsets.only(bottom: bottomInset),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Center(
-                child: Text(
-                  '设置角色',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF222222),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Text('选择角色',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF666666))),
-              const SizedBox(height: 6),
-              Container(
-                height: 42,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: _LiuhecaiShareholderApplyPageColors.borderColor),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<int>(
-                    value: _roleType,
-                    isExpanded: true,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      color: Color(0xFF222222),
-                    ),
-                    items: _buildRoleOptions(),
-                    onChanged: (v) {
-                      if (v != null) setState(() => _roleType = v);
-                    },
-                  ),
-                ),
-              ),
-              if (_roleType != 0) ...[
-                const SizedBox(height: 14),
-                const Text('设置比例（%）',
-                    style: TextStyle(fontSize: 13, color: Color(0xFF666666))),
-                const SizedBox(height: 6),
-                Container(
-                  height: 42,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border.all(color: _LiuhecaiShareholderApplyPageColors.borderColor),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: TextField(
-                    controller: _ratioCtrl,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
-                    ],
-                    style: const TextStyle(
-                      fontSize: 15,
-                      color: Color(0xFF222222),
-                    ),
-                    decoration: const InputDecoration(
-                      border: InputBorder.none,
-                      isDense: true,
-                      contentPadding: EdgeInsets.zero,
-                      hintText: '如 3.5',
-                      hintStyle: TextStyle(
-                        fontSize: 14,
-                        color: Color(0xFFBBBBBB),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => Navigator.of(context).pop(false),
-                      child: Container(
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE6F2FF),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        alignment: Alignment.center,
-                        child: const Text(
-                          '取消',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF007AFF),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: _saving ? null : _save,
-                      child: Opacity(
-                        opacity: _saving ? 0.7 : 1,
-                        child: Container(
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF007AFF),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            _saving ? '保存中...' : '保存',
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  List<DropdownMenuItem<int>> _buildRoleOptions() {
-    final items = <DropdownMenuItem<int>>[];
-    if (widget.isOwner) {
-      items.add(const DropdownMenuItem(value: 0, child: Text('取消身份')));
-      items.add(const DropdownMenuItem(value: 1, child: Text('设为股东')));
-      items.add(const DropdownMenuItem(value: 2, child: Text('设为代理')));
-    } else if (widget.isShareholder) {
-      items.add(const DropdownMenuItem(value: 0, child: Text('取消身份')));
-      items.add(const DropdownMenuItem(value: 2, child: Text('设为代理')));
-    }
-    return items;
-  }
-}
-
-// ==================== 返点设置弹窗 ====================
-class _RebateSheet extends StatefulWidget {
-  final int roomid;
-  final int playerUid;
-  final String playerNickname;
-  final double agentRatio;
-  final double currentRebate;
-
-  const _RebateSheet({
-    required this.roomid,
-    required this.playerUid,
-    required this.playerNickname,
-    required this.agentRatio,
-    required this.currentRebate,
-  });
-
-  @override
-  State<_RebateSheet> createState() => _RebateSheetState();
-}
-
-class _RebateSheetState extends State<_RebateSheet> {
-  late TextEditingController _ctrl;
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = TextEditingController(text: _fmt(widget.currentRebate));
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
     super.dispose();
   }
 
@@ -736,57 +500,88 @@ class _RebateSheetState extends State<_RebateSheet> {
   }
 
   void _toast(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        duration: const Duration(milliseconds: 2000),
-      ),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(milliseconds: 2000)));
   }
 
   Future<void> _save() async {
     if (_saving) return;
-    final rebate = double.tryParse(_ctrl.text.trim()) ?? 0;
-    if (rebate < 0) {
-      _toast('返点不能为负数');
-      return;
-    }
-    if (rebate > widget.agentRatio) {
-      _toast('返点不能超过 ${_fmt(widget.agentRatio)}%');
+    final opt = _selectedOpt;
+
+    String op;
+    final Map<String, dynamic> data = {
+      'roomid': widget.roomid,
+      'uid': widget.target.id,
+    };
+
+    if (opt == 'cancel') {
+      op = 'set_role';
+      data['role_type'] = 0;
+    } else if (opt == 'shareholder') {
+      final ratio = double.tryParse(_ratioCtrl.text) ?? 0;
+      if (ratio < 0 || ratio > 100) {
+        _toast('分红比例需在 0~100 之间');
+        return;
+      }
+      op = 'set_role';
+      data['role_type'] = 1;
+      data['ratio'] = ratio;
+    } else if (opt == 'agent_1' || opt == 'agent_2' || opt == 'agent_3') {
+      final lvl = int.parse(opt.replaceFirst('agent_', ''));
+      final ratio = double.tryParse(_ratioCtrl.text) ?? 0;
+      if (ratio < 0 || ratio > 100) {
+        _toast('比例需在 0~100 之间');
+        return;
+      }
+      if (widget.myAgentLevel != 99 && widget.myAgentLevel != 0) {
+        if (ratio > widget.myRatio) {
+          _toast('返点不能超过 ${_fmt(widget.myRatio)}%');
+          return;
+        }
+      }
+      op = 'set_role';
+      data['role_type'] = 2;
+      data['agent_level'] = lvl;
+      data['ratio'] = ratio;
+    } else if (opt == 'player_rebate') {
+      final ratio = double.tryParse(_ratioCtrl.text) ?? 0;
+      if (ratio < 0 || ratio > 100) {
+        _toast('返点需在 0~100 之间');
+        return;
+      }
+      if (widget.myAgentLevel != 99 && widget.myAgentLevel != 0) {
+        if (ratio > widget.myRatio) {
+          _toast('返点不能超过 ${_fmt(widget.myRatio)}%');
+          return;
+        }
+      }
+      op = 'set_player_rebate';
+      data['ratio'] = ratio;
+    } else {
       return;
     }
 
+    data['op'] = op;
     setState(() => _saving = true);
     try {
       final res = await HttpClient.instance.dio.post(
-        '${ApiConfig.liuhecaiShareholderApply}&op=set_rebate&roomid=${widget.roomid}',
-        data: {
-          'op': 'set_rebate',
-          'roomid': widget.roomid,
-          'player_uid': widget.playerUid,
-          'rebate_ratio': rebate,
-        },
-        options: Options(
-          contentType: Headers.formUrlEncodedContentType,
-          responseType: ResponseType.plain,
-        ),
+        ApiConfig.liuhecaiShareholderApply,
+        data: data,
+        options: Options(contentType: Headers.formUrlEncodedContentType, responseType: ResponseType.plain),
       );
-      dynamic data = res.data;
-      if (data is String) {
-        try { data = jsonDecode(data); } catch (_) {}
+      dynamic body = res.data;
+      if (body is String) {
+        try { body = jsonDecode(body); } catch (_) {}
       }
-      if (data is Map && data['status']?.toString() == '1') {
-        _toast(data['result']?.toString() ?? '设置成功');
+      if (body is Map && body['status']?.toString() == '1') {
+        _toast('保存成功');
         await Future.delayed(const Duration(milliseconds: 300));
         if (mounted) Navigator.of(context).pop(true);
       } else {
-        _toast(data is Map
-            ? (data['result']?.toString() ?? '保存失败')
-            : '保存失败');
+        _toast(body is Map ? (body['result']?.toString() ?? '保存失败') : '保存失败');
       }
     } catch (e) {
-      debugPrint('❌ [set_rebate] $e');
-      _toast('网络错误');
+      debugPrint('❌ [save] $e');
+      _toast('网络错误，请重试');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -795,165 +590,130 @@ class _RebateSheetState extends State<_RebateSheet> {
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final showRatio = _selectedOpt != 'cancel';
+    final showLimitHint = showRatio && widget.myAgentLevel != 99 && widget.myAgentLevel != 0;
+
     return Container(
       padding: EdgeInsets.only(bottom: bottomInset),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
+      decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       child: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Center(
-                child: Text(
-                  '设置返点',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF222222),
-                  ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Center(
+                  child: Text('设置角色', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF222222))),
                 ),
-              ),
-              const SizedBox(height: 18),
-              Text.rich(
-                TextSpan(
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: Color(0xFF666666),
+                const SizedBox(height: 18),
+                const Text('目标', style: TextStyle(fontSize: 13, color: Color(0xFF666666))),
+                const SizedBox(height: 6),
+                Text('${widget.target.nickname}（UID: ${widget.target.id}）', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF222222))),
+                const SizedBox(height: 14),
+                const Text('选择操作', style: TextStyle(fontSize: 13, color: Color(0xFF666666))),
+                const SizedBox(height: 6),
+                Container(
+                  height: 42,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F9FF),
+                    border: Border.all(color: const Color(0xFFD0E4FF)),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  children: [
-                    const TextSpan(text: '玩家：'),
-                    TextSpan(
-                      text: widget.playerNickname,
-                      style: const TextStyle(
-                        color: Color(0xFF222222),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text.rich(
-                TextSpan(
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: Color(0xFF666666),
-                  ),
-                  children: [
-                    const TextSpan(text: '您的佣金比例：'),
-                    TextSpan(
-                      text: '${_fmt(widget.agentRatio)}%',
-                      style: const TextStyle(
-                        color: Color(0xFF007AFF),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 14),
-              const Text(
-                '给玩家设置的返点（%），不能超过您的佣金比例',
-                style: TextStyle(fontSize: 13, color: Color(0xFF666666)),
-              ),
-              const SizedBox(height: 6),
-              Container(
-                height: 42,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: _LiuhecaiShareholderApplyPageColors.borderColor),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: TextField(
-                  controller: _ctrl,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
-                  ],
-                  style: const TextStyle(
-                    fontSize: 15,
-                    color: Color(0xFF222222),
-                  ),
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    isDense: true,
-                    contentPadding: EdgeInsets.zero,
-                    hintText: '如 2.0',
-                    hintStyle: TextStyle(
-                      fontSize: 14,
-                      color: Color(0xFFBBBBBB),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _selectedOpt,
+                      isExpanded: true,
+                      style: const TextStyle(fontSize: 15, color: Color(0xFF222222)),
+                      items: widget.availableOptions.map((opt) {
+                        return DropdownMenuItem<String>(value: opt, child: Text(_optLabels[opt] ?? opt));
+                      }).toList(),
+                      onChanged: (v) { if (v != null) setState(() => _selectedOpt = v); },
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => Navigator.of(context).pop(false),
-                      child: Container(
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE6F2FF),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        alignment: Alignment.center,
-                        child: const Text(
-                          '取消',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF007AFF),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: _saving ? null : _save,
-                      child: Opacity(
-                        opacity: _saving ? 0.7 : 1,
-                        child: Container(
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF007AFF),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            _saving ? '保存中...' : '保存',
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
+                if (showRatio) ...[
+                  const SizedBox(height: 14),
+                  _labeledField(
+                    _selectedOpt == 'shareholder' ? '分红比例（%）' : '下注流水返点（%）',
+                    _ratioCtrl,
+                    '如 3.0',
+                    hintText: showLimitHint ? '不能超过您的 ${_fmt(widget.myRatio)}%' : null,
                   ),
                 ],
-              ),
-            ],
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => Navigator.of(context).pop(false),
+                        child: Container(
+                          height: 44,
+                          decoration: BoxDecoration(color: const Color(0xFFE6F2FF), borderRadius: BorderRadius.circular(10)),
+                          alignment: Alignment.center,
+                          child: const Text('取消', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF007AFF))),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: _saving ? null : _save,
+                        child: Opacity(
+                          opacity: _saving ? 0.7 : 1,
+                          child: Container(
+                            height: 44,
+                            decoration: BoxDecoration(color: const Color(0xFF007AFF), borderRadius: BorderRadius.circular(10)),
+                            alignment: Alignment.center,
+                            child: Text(_saving ? '保存中...' : '保存', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
-}
 
-// 弹窗辅助类：避免命名冲突
-class _LiuhecaiShareholderApplyPageColors {
-  static const Color borderColor = Color(0xFFD0E4FF);
+  Widget _labeledField(String label, TextEditingController ctrl, String hint, {String? hintText}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 13, color: Color(0xFF666666))),
+        const SizedBox(height: 6),
+        Container(
+          height: 42,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF5F9FF),
+            border: Border.all(color: const Color(0xFFD0E4FF)),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: TextField(
+            controller: ctrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
+            style: const TextStyle(fontSize: 15, color: Color(0xFF222222)),
+            decoration: InputDecoration(
+              border: InputBorder.none, isDense: true, contentPadding: EdgeInsets.zero,
+              hintText: hint, hintStyle: const TextStyle(fontSize: 14, color: Color(0xFFBBBBBB)),
+            ),
+          ),
+        ),
+        if (hintText != null) ...[
+          const SizedBox(height: 4),
+          Text(hintText, style: const TextStyle(fontSize: 12, color: Color(0xFFE94848))),
+        ],
+      ],
+    );
+  }
 }
